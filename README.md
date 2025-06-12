@@ -18,7 +18,7 @@
 
 ## 前言
 
-DirectX 12 从 2015 年发布起，经过了长时间的变革与发展，成为了图形界一致的认可，被应用到现代游戏中。众多技术大神 (例如 Frank D. Luna, GameBabyRockSun, Yigarlor, 辰月二十七, 指掀涛澜天下惊, Dylan 等等) 对 DX12 API 进行了全面的深度解读，示例代码完全匹配他们高超的能力。然而无论是微软官方示例的 DirectX-Sample, 还是这些技术大神的示例代码，都对初学者 (尤其是初次接触底层 API 的初学者) 造成了不少的困扰。
+DirectX 12 从 2015 年发布起，经过了长时间的变革与发展，获得了图形界一致的认可，被应用到现代游戏中。众多技术大神 (例如 Frank D. Luna, GameBabyRockSun, Yigarlor, 辰月二十七, 指掀涛澜天下惊, Dylan 等等) 对 DX12 API 进行了全面的深度解读，示例代码完全匹配他们高超的能力。然而无论是微软官方示例的 DirectX-Sample, 还是这些技术大神的示例代码，都对初学者 (尤其是初次接触底层 API 的初学者) 造成了不少的困扰。
 
 ![](https://raw.githubusercontent.com/DG-AF/DX12-Quick-Tutorial/master/GitPicDir/434924d4bc0ffcf4c9847705c1aeb90a.jpg)
 
