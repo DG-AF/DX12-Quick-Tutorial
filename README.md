@@ -1,4 +1,4 @@
-![](https://raw.gitmirror.com/DG-AF/DX12-Quick-Tutorial/master/GitPicDir/2.PNG)# DX12 快速教程
+# DX12 快速教程
 
 - [前言](#前言)
 - [配置方法 (教程资源获取方法)](#配置方法-教程资源获取方法)
