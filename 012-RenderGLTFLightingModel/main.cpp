@@ -438,7 +438,7 @@ private:
 	const aiScene* m_ModelScene = nullptr;							// 模型/场景对象
 
 	// 导入模型使用的标志
-	// aiProcess_ConvertToLeftHanded: Assimp 导入的模型是以 OpenGL 的坐标系统为基础的，将模型转换成 DirectX 的坐标系统
+	// aiProcess_ConvertToLeftHanded: Assimp 导入的模型是以 OpenGL 的右手坐标系统为基础的，将模型转换成 DirectX 的左手坐标系统
 	// aiProcess_Triangulate：模型设计师可能使用多边形对模型进行建模的，对于用多边形建模的模型，将它们都转换成基于三角形建模
 	// aiProcess_GenNormals: 对全部网格的顶点，都生成顶点法线
 	// aiProcess_FixInfacingNormals：建模软件都是双面显示的，所以设计师不会在意顶点绕序方向，部分面会被剔除无法正常显示，需要翻转过来

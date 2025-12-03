@@ -70,7 +70,7 @@ int main()
 	const aiScene* m_ModelScene = nullptr;							// 模型/场景对象
 
 	// 导入模型使用的标志
-	// aiProcess_ConvertToLeftHanded: Assimp 导入的模型是以 OpenGL 的坐标系统为基础的，将模型转换成 DirectX 的坐标系统
+	// aiProcess_ConvertToLeftHanded: Assimp 导入的模型是以 OpenGL 的右手坐标系为基础的，将模型转换成 DirectX 的左手坐标系
 	// aiProcess_Triangulate：模型设计师可能使用多边形对模型进行建模的，对于用多边形建模的模型，将它们都转换成基于三角形建模
 	// aiProcess_FixInfacingNormals：建模软件都是双面显示的，所以设计师不会在意顶点绕序方向，部分面会被剔除无法正常显示，需要翻转过来
 	// aiProcess_LimitBoneWeights: 限制顶点的骨骼权重最多为 4 个，其余权重无需处理
@@ -151,8 +151,8 @@ int main()
 		// 材质对应的纹理文件名
 		aiString materialPath;
 
-		// 获取材质对应的纹理，有时候一个材质甚至会有多个同类型的纹理，这些同类型的纹理，相当于游戏角色的不同皮肤
-		// Assimp 为了区分这些纹理，特意设置了一个叫 Channel 通道的东西，如果类型相同，不同纹理会占据不同通道
+		// 获取材质对应的纹理，有时候一个材质甚至会有多个名字相同，但是类型不同的纹理贴图
+		// Assimp 为了区分这些纹理，特意设置了一个叫 Channel 通道的东西，如果名字相同，不同类型的纹理贴图会占据不同通道
 		// GetTexture 的第二个参数就是通道索引，大部分材质同类型下最多只有一个纹理，所以第二个参数直接指定 0 就行
 		// 注意 GetTexture 的返回值表示状态，aiReturn_SUCCESS 才算获取成功
 		if (material->GetTexture(aiTextureType_EMISSIVE, 0, &materialPath) == aiReturn_SUCCESS)

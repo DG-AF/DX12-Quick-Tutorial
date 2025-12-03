@@ -71,8 +71,8 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>$(SolutionDir)Assimp\include;$(IncludePath)</IncludePath>
-    <LibraryPath>$(SolutionDir)Assimp\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(SolutionDir)Assimp/include;$(IncludePath)</IncludePath>
+    <LibraryPath>$(SolutionDir)Assimp/lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
