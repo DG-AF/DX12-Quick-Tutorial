@@ -135,6 +135,8 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，使它无异于图形学的 C+
 
 ### (13) RenderGLTFAnimation
 
+![]()
+
 加入骨骼动画，使用 DirectX 12 + Assimp 渲染《超次元游戏 海王星》中的 Neptune 涅普顿(绀紫之心) GLTF模型 的骨骼动画，了解骨骼动画的基本原理和流程，认识四元数及其应用，理解 Assimp 的数据存储方式
 
 
