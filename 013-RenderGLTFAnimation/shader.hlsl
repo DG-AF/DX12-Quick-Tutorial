@@ -1,5 +1,5 @@
 
-// (13) RenderGLTFAnimation: 使用 DirectX 12 + Assimp 渲染《超次元游戏 海王星》中的 涅普缇努 gltf 骨骼动画
+// (13) RenderGLTFAnimation: 使用 DirectX 12 + Assimp 渲染《超次元游戏 海王星》中的 Neptune 涅普顿(绀紫之心) GLTF模型 的骨骼动画
 
 struct VSInput      // VS 阶段输入顶点数据
 {

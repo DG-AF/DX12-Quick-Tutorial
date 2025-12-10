@@ -1,7 +1,7 @@
 
-// (10) RenderGLTFModel: 使用 DirectX 12 + Assimp 渲染《Minecraft》中的 苦力怕 gltf 模型 (该模型没有骨骼)
-// 鸣谢原作者大大: Vincent Yanez (https://sketchfab.com/vinceyanez) 
-// 模型项目地址: https://sketchfab.com/3d-models/minecraft-creeper-fd66182f07e5408eb04fa5a88ae16055
+// (10) RenderGLTFModel: 使用 DirectX 12 + Assimp 渲染《合金装备崛起:复仇》中的 塞穆尔·罗德里格斯 gltf 模型 (该模型没有绑定骨骼)
+// 鸣谢原作者大大: Mono_213 (https://sketchfab.com/Mono_213) 
+// 模型项目地址: https://sketchfab.com/3d-models/metal-gear-rising-jetstream-sam-7256008fd1124ec589fdd98d4b5acf33
 
 
 // windows.h 与标准库里的 min/max 函数重名导致冲突了，禁用 windows.h 里面的 min/max 函数
@@ -409,8 +409,8 @@ private:
 
 
 
-	std::string ModelFileName = "creeper/scene.gltf";				// 模型文件名
-	std::string ModelTextureFilePath = "creeper/";					// 模型所在文件夹
+	std::string ModelFileName = "sam/scene.gltf";					// 模型文件名
+	std::string ModelTextureFilePath = "sam/";						// 模型所在文件夹
 	Assimp::Importer* m_ModelImporter = new Assimp::Importer;		// 模型导入器
 	const aiScene* m_ModelScene = nullptr;							// 模型/场景对象
 
@@ -553,7 +553,7 @@ public:
 		RegisterClass(&wc);					// 注册窗口类，将窗口类录入到操作系统中
 
 		// 使用上文的窗口类创建窗口
-		m_hwnd = CreateWindow(wc.lpszClassName, L"Creeper", WS_SYSMENU | WS_OVERLAPPED,
+		m_hwnd = CreateWindow(wc.lpszClassName, L"Samuel Rodrigues", WS_SYSMENU | WS_OVERLAPPED,
 			10, 10, WindowWidth, WindowHeight,
 			NULL, NULL, hins, NULL);
 
