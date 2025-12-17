@@ -1181,6 +1181,10 @@ public:
 					// 需要添加一个新矩阵，表示该 Mesh 下专用的变换矩阵，这个就是最终要添加到顶点的索引
 					const UINT FinalSkinnedMeshIndex = BoneNode_TransformGroup.size();
 
+					// BoneNode_IndexGroup 添加新键值对，注意这里！第 13 章计算动画矩阵时需要用到！
+					BoneNode_IndexGroup[std::string("_Mesh_") + std::to_string(i) +
+						std::string("_To_Bone_") + std::to_string(BoneIndex)] = FinalSkinnedMeshIndex;
+
 
 					// 获取最终转换矩阵 (Mesh Space -> Model Space)
 					// BoneNode_TransformGroup[BoneIndex] 表示 Bone Space -> Model Space 的矩阵 (矩阵乘法结合律，先乘后面的结果不变)
@@ -1266,7 +1270,7 @@ public:
 		}
 
 
-		// BoneNode_IndexGroup = 骨骼到模型的索引映射 + 未绑定骨骼的网格到模型的索引映射 (这两个指的都是 Bone -> Model)
+		// BoneNode_IndexGroup = 骨骼到模型的索引映射 + 未绑定骨骼的网格到模型的索引映射 (这两个指的都是 Bone -> Model) + 绑定骨骼的 _Mesh_To_Bone_i 映射 (Mesh -> Model)
 		// BoneNode_TransformGroup = 骨骼到模型的变换矩阵 (Bone -> Model) + 蒙皮网格到模型的变换矩阵 (Skinned Mesh -> Model)
 	}
 

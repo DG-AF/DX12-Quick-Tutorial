@@ -1052,6 +1052,10 @@ public:
 					// 需要添加一个新矩阵，表示该 Mesh 下专用的变换矩阵，这个就是最终要添加到顶点的索引
 					const UINT FinalSkinnedMeshIndex = BoneNode_TransformGroup.size();
 
+					// BoneNode_IndexGroup 添加新键值对，注意这里！第 13 章计算动画矩阵时需要用到！
+					BoneNode_IndexGroup[std::string("_Mesh_") + std::to_string(i) +
+						std::string("_To_Bone_") + std::to_string(BoneIndex)] = FinalSkinnedMeshIndex;
+
 
 					// 获取最终转换矩阵 (Mesh Space -> Model Space)
 					// BoneNode_TransformGroup[BoneIndex] 表示 Bone Space -> Model Space 的矩阵 (矩阵乘法结合律，先乘后面的结果不变)
@@ -1137,7 +1141,7 @@ public:
 		}
 
 		
-		// BoneNode_IndexGroup = 骨骼到模型的索引映射 + 未绑定骨骼的网格到模型的索引映射 (这两个指的都是 Bone -> Model)
+		// BoneNode_IndexGroup = 骨骼到模型的索引映射 + 未绑定骨骼的网格到模型的索引映射 (这两个指的都是 Bone -> Model) + 绑定骨骼的 _Mesh_To_Bone_i 映射 (Mesh -> Model)
 		// BoneNode_TransformGroup = 骨骼到模型的变换矩阵 (Bone -> Model) + 蒙皮网格到模型的变换矩阵 (Skinned Mesh -> Model)
 	}
 
@@ -2093,7 +2097,7 @@ public:
 	{
 		// 将更新后的矩阵，存储到共享内存上的常量缓冲，这样 GPU 就可以访问到 MVP 矩阵了
 		XMStoreFloat4x4(&MVPBuffer->MVPMatrix, m_FirstCamera.GetMVPMatrix());
-
+		
 		// 更新骨骼偏移矩阵组，这个对下一节的骨骼动画相当重要
 		// 这里可以直接 memcpy 进行复制，因为 XMMATRIX 和 XMFLOAT4X4 结构相同，占用内存也相同
 		memcpy(&MVPBuffer->BoneTransformMatrix[0], &BoneNode_TransformGroup[0],
