@@ -820,7 +820,7 @@ public:
 			// 模型文件携带的材质/纹理文件路径
 			aiString materialPath;
 
-
+			
 			// 检测并加载 Diffuse Material 漫反射材质贴图，漫反射贴图是表示物体表面颜色的基本纹理，大多数都是漫反射材质
 			// 一般而言会带有 _diffuse，_base_color，_albedo 这些后缀，一般情况下这三个是等同的
 			if (material->GetTexture(aiTextureType_DIFFUSE, 0, &materialPath) == aiReturn_SUCCESS)
