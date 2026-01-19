@@ -1,0 +1,11 @@
+Model Information:
+* title:	Metal Gear Rising - Jetstream Sam
+* source:	https://sketchfab.com/3d-models/metal-gear-rising-jetstream-sam-7256008fd1124ec589fdd98d4b5acf33
+* author:	Mono_213 (https://sketchfab.com/Mono_213)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Metal Gear Rising - Jetstream Sam" (https://sketchfab.com/3d-models/metal-gear-rising-jetstream-sam-7256008fd1124ec589fdd98d4b5acf33) by Mono_213 (https://sketchfab.com/Mono_213) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
