@@ -4,7 +4,7 @@
 - [前言](#前言)
 - [配置方法 (教程资源获取方法)](#配置方法-教程资源获取方法)
 - [教程目录](#教程目录)
-  - [(1) InitWindow](#\(1\)InitWindow)
+  - [(1) InitWindow](#1-InitWindow)
   - [(2) DrawSkyblueWindow](#2-DrawSkyblueWindow)
   - [(3) DrawRectangle](#3-DrawRectangle)
   - [(4) DrawTexture](#4-DrawTexture)
