@@ -337,7 +337,7 @@ public:
 		// 改变位置后，观察向量、焦距、右方向向量也要改变，否则会发生视角瞬移
 		ViewDirection = XMVector3Normalize(FocusPosition - EyePosition);
 		FocalLength = XMVectorGetX(XMVector3Length(FocusPosition - EyePosition));
-		RightDirection = XMVector3Normalize(XMVector3Cross(ViewDirection, UpDirection));
+		RightDirection = XMVector3Normalize(XMVector3Cross(UpDirection, ViewDirection));
 	}
 
 	// 设置摄像机焦点
@@ -348,7 +348,7 @@ public:
 		// 改变位置后，观察向量、焦距、右方向向量也要改变，否则会发生视角瞬移
 		ViewDirection = XMVector3Normalize(FocusPosition - EyePosition);
 		FocalLength = XMVectorGetX(XMVector3Length(FocusPosition - EyePosition));
-		RightDirection = XMVector3Normalize(XMVector3Cross(ViewDirection, UpDirection));
+		RightDirection = XMVector3Normalize(XMVector3Cross(UpDirection, ViewDirection));
 	}
 
 	// 设置摄像机的模型矩阵
@@ -2117,13 +2117,9 @@ public:
 
 	UINT AnimationCount = 0;	// 模型动画数
 	UINT AnimationIndex = 0;	// 当前播放的动画索引 (0 是 Static Pose，其他都是动画)
-	float AnimeTPS = 0;			// 动画的每秒帧数 (以动画帧为单位)，FPS 需要换算成 TPS 才能进行插值
+	float AnimeTPS = 0;			// 动画的每秒帧数 (以动画帧为单位)
 	float AnimeDuration = 0;	// 动画的持续时间 (以秒为单位)
-	float AnimeTime = 0;		// 动画时间 (以秒为单位)
-	const float FPS = 1.0 / 60;	// 每秒帧数，用于累增动画时间，我们这里设置常见的 60 帧
-
-	// 动画更新条件 (以毫秒为单位)，计时只有大于它才会更新动画帧
-	const UINT64 AnimeFlushCondition = FPS * 1000;
+	float AnimeTime = 0;		// 动画时间 (以秒为单位)，当前动画时间 * TPS = 当前所处动画帧
 	UINT64 RecordedTime = 0;	// 上一次计时 (以毫秒为单位)，用于更新动画
 	UINT64 CurrentTime = 0;		// 当前计时 (以毫秒为单位)，用于更新动画
 
@@ -2269,7 +2265,7 @@ public:
 
 			// 插值得到该帧的旋转矩阵，注意这里的插值是四元数球面线性插值！
 			XMVECTOR RotationQuaternion = XMQuaternionSlerp(LastTickVec, NextTickVec, Factor);
-			// 将四元数转换成旋转矩阵
+			// 将四元数转换成旋转矩阵，注意这里要对四元数进行单位化！因为浮点数舍入可能会破坏四元数的性质，导致四元数无效！
 			BoneAnime_RotationMatrix = XMMatrixRotationQuaternion(XMQuaternionNormalize(RotationQuaternion));
 		}
 
@@ -2444,35 +2440,30 @@ public:
 		{
 			// 获取当前时间
 			CurrentTime = GetTickCount64();
+			
+			// AnimeTime 累增，这里可以决定动画播放速度 (注意单位转换，1000 ms = 1 s)
+			AnimeTime += (CurrentTime - RecordedTime) / 1000.0;
+			// 相当于 AnimeTime = AnimeTime % AnimeDuration，如果动画时间到了，就取模，让它重新播放
+			AnimeTime = fmod(AnimeTime, AnimeDuration);
 
-			// 如果时间差达到更新要求，就计算并更新当前帧，并更新时间
-			if (CurrentTime - RecordedTime >= AnimeFlushCondition)
+			// 更新记录时间
+			RecordedTime = CurrentTime;
+
+			// 先更新动画节点的 SQT 矩阵
+			UpdateAnimeNodeMatrix();
+
+			// 根据骨骼树，递归计算骨骼矩阵
+			XMMATRIX xmmar = XMMatrixIdentity();
+			CalcAnimeModelNodeMatrix(m_ModelScene->mRootNode, xmmar);
+
+			// 计算最终 Mesh 网格要变换到的矩阵，后面交由 GPU 进行顶点混合
+			TransformMeshToBoneFinalMatrix();
+
+			// 将矩阵进行转置，对应 GPU 的 Row-Major 按行读取
+			// Assimp 的矩阵是 Column-Major 列主序，而 GPU 需要行主序，所以需要转置
+			for (UINT i = 0; i < BoneNode_Animation_TransformGroup.size(); i++)
 			{
-				// AnimeTime 累增，这里是决定动画播放速度的部分
-				AnimeTime += FPS * 1.5;
-				// 相当于 AnimeTime = AnimeTime % AnimeDuration，如果动画时间到了，就取模，让它重新播放
-				AnimeTime = fmod(AnimeTime, AnimeDuration);
-
-				// 更新记录时间
-				RecordedTime = CurrentTime;
-
-				// 先更新动画节点的 SQT 矩阵
-				UpdateAnimeNodeMatrix();
-
-				// 根据骨骼树，递归计算骨骼矩阵
-				XMMATRIX xmmar = XMMatrixIdentity();
-				CalcAnimeModelNodeMatrix(m_ModelScene->mRootNode, xmmar);
-
-				// 计算最终 Mesh 网格要变换到的矩阵，后面交由 GPU 进行顶点混合
-				TransformMeshToBoneFinalMatrix();
-
-				// 将矩阵进行转置，对应 GPU 的 Row-Major 按行读取
-				// Assimp 的矩阵是 Column-Major 列主序，而 GPU 需要行主序，所以需要转置
-				for (UINT i = 0; i < BoneNode_Animation_TransformGroup.size(); i++)
-				{
-					BoneNode_Animation_TransformGroup[i] = XMMatrixTranspose(BoneNode_Animation_TransformGroup[i]);
-				}
-
+				BoneNode_Animation_TransformGroup[i] = XMMatrixTranspose(BoneNode_Animation_TransformGroup[i]);
 			}
 
 			// 更新插值变换后的骨骼偏移矩阵组
