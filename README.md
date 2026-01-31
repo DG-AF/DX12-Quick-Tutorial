@@ -4,6 +4,7 @@
 - [前言](#前言)
 - [配置方法 (教程资源获取方法)](#配置方法-教程资源获取方法)
 - [教程目录](#教程目录)
+- [基础篇](#1-InitWindow)
   - [(1) InitWindow](#1-InitWindow)
   - [(2) DrawSkyblueWindow](#2-DrawSkyblueWindow)
   - [(3) DrawRectangle](#3-DrawRectangle)
@@ -12,16 +13,24 @@
   - [(6) FirstPersonView](#6-FirstPersonView)
   - [(7) RenderMatchbox](#7-RenderMatchbox)
   - [(8) AlphaBlend](#8-AlphaBlend)
+- [Assimp 篇](#9-AssimpAcquaintance)
   - [(9) AssimpAcquaintance](#9-AssimpAcquaintance)
   - [(10) RenderGLTFModel](#10-RenderGLTFModel)
   - [(11) RenderGLTFSkinnedModel](#11-RenderGLTFSkinnedModel)
   - [(12) RenderGLTFLightingModel](#12-RenderGLTFLightingModel)
   - [(13) RenderGLTFAnimation](#13-RenderGLTFAnimation)
+- [进阶篇]()
 
-## 2026.1.29 修正部分代码，更新文字教程
+## 2026.1.31 更新 master 和 dev 新分支，Readme 文字描述预告
 
-**1.再次修正了第 13 章摄像机右向量叉乘运算，修正左右移动与摄像机y轴旋转以及每帧动画解算，修正部分文字描述** <br/>
-**2.更新文字教程**
+**1.增加了 dev 分支，方便读者们 clone 示例，同时也方便作者本人开发** <br/>
+**2.master 分支是开发完整的 Release 示例，我们的教程代码都是以 master 分支为主的，可以直接 clone 使用；** <br/>
+**3.dev 分支是正在开发阶段的示例，将频繁更新，计划每一阶段完成后会 merge 给 master 分支，不建议读者 clone dev 分支** <br/>
+**4.教程预告：** <br/>
+<br/>
+1. **DX12 快速教程(14) —— 法线纹理** <br/>
+2. **DX12 快速教程(15) —— 天空盒与 IBL** <br/>
+3. **DX12 快速教程(16) —— 预编译 PSO**
 
 ## 前言
 
