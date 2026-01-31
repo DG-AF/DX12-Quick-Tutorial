@@ -4,7 +4,7 @@
 struct VSInput      // VS 阶段输入顶点数据
 {
 	float4 position : POSITION;			// 输入顶点的位置
-	float4 normal : NORMAL;				// 顶底法线，用于光照
+	float4 normal : NORMAL;				// 顶点法线，用于光照
 	float2 texcoordUV : TEXCOORD;		// 输入顶点的纹理坐标
 	float4 color : COLOR;				// 对于自发光纹理，可能带有的颜色
 	uint4 BoneIndices : BLENDINDICES;	// 骨骼索引

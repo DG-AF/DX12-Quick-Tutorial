@@ -1132,7 +1132,7 @@ public:
 
 
 
-			// Mesh 对应的纹理索引，Assimp 保证每个 Mesh 最多对应一个纹理，如果对应了多个纹理，导入模型时会自动将其分割
+			// Mesh 对应的材质索引，Assimp 保证每个 Mesh 最多对应一个材质，如果对应了多个材质，导入模型时会自动将其分割
 			new_mesh.MaterialIndex = mesh->mMaterialIndex;
 
 
@@ -1212,7 +1212,7 @@ public:
 		float RadiusY = (ModelBoundingBox.maxBoundsY - ModelBoundingBox.minBoundsY) / 2.0;	// AABB 盒半径 y 分量
 		float RadiusZ = (ModelBoundingBox.maxBoundsZ - ModelBoundingBox.minBoundsZ) / 2.0;	// AABB 盒半径 z 分量
 
-		// 模型 AABB 盒半径 (外接球半径)，加 1 是为了摄像机和模型拉开距离
+		// 模型 AABB 盒半径 (外接球半径)
 		float Radius = std::sqrt(RadiusX * RadiusX + RadiusY * RadiusY + RadiusZ * RadiusZ) / 2.0;
 		
 		*/

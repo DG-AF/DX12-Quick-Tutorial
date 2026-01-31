@@ -327,7 +327,7 @@ public:
 		// 改变位置后，观察向量、焦距、右方向向量也要改变，否则会发生视角瞬移
 		ViewDirection = XMVector3Normalize(FocusPosition - EyePosition);
 		FocalLength = XMVectorGetX(XMVector3Length(FocusPosition - EyePosition));
-		RightDirection = XMVector3Normalize(XMVector3Cross(ViewDirection, UpDirection));
+		RightDirection = XMVector3Normalize(XMVector3Cross(UpDirection, ViewDirection));
 	}
 
 	// 设置摄像机焦点
@@ -338,7 +338,7 @@ public:
 		// 改变位置后，观察向量、焦距、右方向向量也要改变，否则会发生视角瞬移
 		ViewDirection = XMVector3Normalize(FocusPosition - EyePosition);
 		FocalLength = XMVectorGetX(XMVector3Length(FocusPosition - EyePosition));
-		RightDirection = XMVector3Normalize(XMVector3Cross(ViewDirection, UpDirection));
+		RightDirection = XMVector3Normalize(XMVector3Cross(UpDirection, ViewDirection));
 	}
 
 public:
@@ -1243,7 +1243,7 @@ public:
 
 
 
-			// Mesh 对应的纹理索引，Assimp 保证每个 Mesh 最多对应一个纹理，如果对应了多个纹理，导入模型时会自动将其分割
+			// Mesh 对应的材质索引，Assimp 保证每个 Mesh 最多对应一个材质，如果对应了多个材质，导入模型时会自动将其分割
 			new_mesh.MaterialIndex = mesh->mMaterialIndex;
 
 
@@ -1321,7 +1321,7 @@ public:
 		float RadiusY = (ModelBoundingBox.maxBoundsY - ModelBoundingBox.minBoundsY) / 2.0;	// AABB 盒半径 y 分量
 		float RadiusZ = (ModelBoundingBox.maxBoundsZ - ModelBoundingBox.minBoundsZ) / 2.0;	// AABB 盒半径 z 分量
 
-		// 模型 AABB 盒半径 (外接球半径)，加 1 是为了摄像机和模型拉开距离
+		// 模型 AABB 盒半径 (外接球半径)
 		float Radius = std::sqrt(RadiusX * RadiusX + RadiusY * RadiusY + RadiusZ * RadiusZ) / 2.0;
 
 
@@ -2359,7 +2359,7 @@ public:
 		// 否则会报 D3D12 WARNING: The application did not pass any clear value to resource creation.
 		m_CommandList->ClearDepthStencilView(DSVHandle, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
 
-		// 清空当前渲染目标的背景为天蓝色
+		// 方便我们查看 Blinn-Phong 模型的光照效果，这里清空用了黑色
 		m_CommandList->ClearRenderTargetView(RTVHandle, DirectX::Colors::Black, 0, nullptr);
 
 		// 用于设置描述符堆用的临时 ID3D12DescriptorHeap 数组
