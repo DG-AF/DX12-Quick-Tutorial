@@ -1,0 +1,11 @@
+Model Information:
+* title:	Kurumi Model
+* source:	https://sketchfab.com/3d-models/kurumi-model-f776c64883414c71b9441b8c45342533
+* author:	close2animation (https://sketchfab.com/close2animation)
+
+Model License:
+* license type:	CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
+* requirements:	Author must be credited. No commercial use.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Kurumi Model" (https://sketchfab.com/3d-models/kurumi-model-f776c64883414c71b9441b8c45342533) by close2animation (https://sketchfab.com/close2animation) licensed under CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)

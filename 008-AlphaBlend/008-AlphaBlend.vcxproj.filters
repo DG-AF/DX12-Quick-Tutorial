@@ -1,0 +1,81 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="resource">
+      <UniqueIdentifier>{5c061ac2-56e8-4260-a2bc-98baa3434ff8}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="resource\bed_feet_end.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\bed_feet_side.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\bed_feet_top.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\bed_head_end.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\bed_head_side.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\bed_head_top.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\crafting_table_front.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\crafting_table_side.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\crafting_table_top.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\dirt.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\door_wood_lower.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\door_wood_upper.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\furnace_front_off.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\furnace_side.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\furnace_top.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\glass_light_blue.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\grass_side.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\grass_top.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\log_oak.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\log_oak_top.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\planks_oak.png">
+      <Filter>resource</Filter>
+    </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="OpaqueShader.hlsl" />
+    <FxCompile Include="TranslucenceShader.hlsl" />
+    <FxCompile Include="TransparentShader.hlsl" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+  </ItemGroup>
+</Project>
