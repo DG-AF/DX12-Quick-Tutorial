@@ -1528,7 +1528,9 @@ public:
 				{
 					DXGI_ADAPTER_DESC1 adap = {};
 					m_DXGIAdapter->GetDesc1(&adap);
-					OutputDebugStringW(adap.Description);		// 在输出窗口上输出创建 D3D12 设备所用的显卡名称
+					OutputDebugStringW(L"当前使用的显卡：");
+					OutputDebugStringW(adap.Description);
+					OutputDebugStringW(L"\n");
 					return true;
 				}
 			}

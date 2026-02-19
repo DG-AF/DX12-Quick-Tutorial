@@ -315,7 +315,9 @@ public:
 				{
 					DXGI_ADAPTER_DESC1 adap = {};
 					m_DXGIAdapter->GetDesc1(&adap);
+					OutputDebugStringW(L"当前使用的显卡：");
 					OutputDebugStringW(adap.Description);
+					OutputDebugStringW(L"\n");
 					return true;
 				}
 			}

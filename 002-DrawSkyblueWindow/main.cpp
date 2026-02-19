@@ -117,6 +117,11 @@ public:
 				// 创建 D3D12 核心层设备，创建成功就返回 true
 				if (SUCCEEDED(D3D12CreateDevice(m_DXGIAdapter.Get(), level, IID_PPV_ARGS(&m_D3D12Device))))
 				{
+					DXGI_ADAPTER_DESC1 adap = {};
+					m_DXGIAdapter->GetDesc1(&adap);
+					OutputDebugStringW(L"当前使用的显卡：");
+					OutputDebugStringW(adap.Description);
+					OutputDebugStringW(L"\n");
 					return true;
 				}
 			}

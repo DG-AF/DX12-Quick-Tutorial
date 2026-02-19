@@ -140,7 +140,9 @@ public:
 				{
 					DXGI_ADAPTER_DESC1 adap = {};
 					m_DXGIAdapter->GetDesc1(&adap);
+					OutputDebugStringW(L"当前使用的显卡：");
 					OutputDebugStringW(adap.Description);
+					OutputDebugStringW(L"\n");
 					return true;
 				}
 			}
@@ -507,7 +509,6 @@ public:
 			switch (ActiveEvent - WAIT_OBJECT_0)
 			{
 			case 0:				// ActiveEvent 是 0，说明渲染事件已经完成了，进行下一次渲染
-				Sleep(10);
 				Render();
 				break;
 
