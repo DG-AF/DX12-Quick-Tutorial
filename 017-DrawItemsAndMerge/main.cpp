@@ -1,23 +1,29 @@
 
-// (15) DrawInstanced: 学会 DirectX 12 的纹理数组、SRV Structured Buffer 结构化缓冲的创建与使用，以及多实例渲染的应用，一次性快速渲染大量方块
+// (17) DrawItemsAndMerge: 认识等轴变换，学会在 2D 上渲染立体图标，同时整合 D2D 和 DX12 的渲染
 
 
-#include<Windows.h>			// Windows 窗口编程核心头文件
-#include<d3d12.h>			// DX12 核心头文件
-#include<dxgi1_6.h>			// DXGI 头文件，用于管理与 DX12 相关联的其他必要设备，如 DXGI 工厂和 交换链
-#include<DirectXColors.h>	// DirectX 颜色库
-#include<DirectXMath.h>		// DirectX 数学库
-#include<d3dcompiler.h>		// DirectX Shader 着色器编译库
-#include<wincodec.h>		// WIC 图像处理框架，用于解码编码转换图片文件
+#include<Windows.h>				// Windows 窗口编程核心头文件
+#include<d3d12.h>				// DX12 核心头文件
+#include<dxgi1_6.h>				// DXGI 头文件，用于管理与 DX12 相关联的其他必要设备，如 DXGI 工厂和 交换链
+#include<wincodec.h>			// WIC 图像处理框架，用于解码编码转换图片文件
+#include<d3dcompiler.h>			// DirectX Shader 着色器编译库
+#include<DirectXColors.h>		// DirectX 颜色库
+#include<DirectXMath.h>			// DirectX 数学库
 
 
-#include<wrl.h>				// COM 组件模板库，方便写 DX12 和 DXGI 相关的接口
-#include<string>			// C++ 标准 string 库
-#include<sstream>			// C++ 字符串流处理库
-#include<functional>		// C++ 标准函数对象库，用于下文的 std::function 函数包装器与 std::bind 绑定回调函数
-#include<fstream>			// C++ 文件流处理库
-#include<vector>			// C++ STL vector 容器库
-#include<codecvt>			// C++ 字符编码转换库，用于 string 转 wstring
+#include<d3d11_4.h>				// 最新版本的 DX11 头文件，DX12 与 D2D 的互操作需要 DX11 搭桥引线，需要用到 D3D11Device
+#include<d3d11on12.h>			// DX11On12 就是我们 "搭桥引线" 要用的过渡设备，它包含了过渡设备运行在 DX12 底层的所有必要声明
+#include<d2d1_3.h>				// 最新版本的 Direct 2D 图形库，包含了很多新旧版本的组件和函数，我们需要拿它绘制 UI
+
+
+#include<wrl.h>					// COM 组件模板库，方便写 DX12 和 DXGI 相关的接口
+#include<string>				// C++ 标准 string 库
+#include<sstream>				// C++ 字符串流处理库
+#include<functional>			// C++ 标准函数对象库，用于下文的 std::function 函数包装器与 std::bind 绑定回调函数
+#include<fstream>				// C++ 文件流处理库
+#include<vector>				// C++ STL vector 容器库
+#include<codecvt>				// C++ 字符编码转换库，用于 string 转 wstring
+#include<iomanip>				// C++ 输入输出控制格式化库，用于 CallBackFunc 的 std::fixed 与 std::setprecision
 
 
 #pragma comment(lib,"d3d12.lib")			// 链接 DX12 核心 DLL
@@ -25,6 +31,8 @@
 #pragma comment(lib,"dxguid.lib")			// 链接 DXGI 必要的设备 GUID
 #pragma comment(lib,"d3dcompiler.lib")		// 链接 DX12 需要的着色器编译 DLL
 #pragma comment(lib,"windowscodecs.lib")	// 链接 WIC DLL
+#pragma comment(lib,"d2d1.lib")				// 链接 D2D1 DLL
+#pragma comment(lib,"d3d11.lib")			// 链接 D3D11 核心 DLL
 
 
 using namespace Microsoft;
@@ -34,6 +42,7 @@ using namespace DirectX;			// DirectX 命名空间
 
 
 // ---------------------------------------------------------------------------------------------------------------
+
 
 
 // 命名空间 DX12TextureHelper 包含了帮助我们转换纹理图片格式的结构体与函数
@@ -167,6 +176,7 @@ namespace DX12TextureHelper
 }
 
 
+
 // 用于绑定回调函数的中间层
 class CallBackWrapper
 {
@@ -183,6 +193,1028 @@ public:
 	}
 
 };
+
+
+
+// ---------------------------------------------------------------------------------------------------------------
+
+
+
+// D2D 引擎，用于 2D UI 绘制
+class D2DEngine
+{
+private:
+
+	UINT m_D3D11CreateDeviceFlag = NULL;	// 创建 D3D11 设备时需要用到的标志
+
+	// 最高版本的 D3D11 核心设备，用于创建 D2D 相关设备 (中间人)，在整个 DX11 中负责所有资源的创建，类似 DX12 的 m_D3D12Device
+	ComPtr<ID3D11Device5> m_D3D11Device;
+	// 最高版本的 D3D11 设备上下文，在整个 DX11 中负责设置渲染状态，更新资源数据，以及发出指令，类似 DX12 的 m_CommandList + m_CommandQueue
+	ComPtr<ID3D11DeviceContext4> m_D3D11DeviceContext;
+	// 较高版本的 D3D11On12 过渡设备，D2D 与 D3D12 交互的核心设备，用于创建 DXGIDevice，以及管理 Warp 包装器资源
+	ComPtr<ID3D11On12Device1> m_D3D11On12Device;
+
+	// 创建 D2D 工厂需要用到的选项 (标志)
+	D2D1_FACTORY_OPTIONS m_D2DCreateFactoryOptions = {};
+
+	// 创建 D2D 设备上下文需要用到的选项 (标志)，D2D1_DEVICE_CONTEXT_OPTIONS_NONE 表示不使用多线程设备上下文
+	D2D1_DEVICE_CONTEXT_OPTIONS m_D2DCreateDeviceContextOptions = D2D1_DEVICE_CONTEXT_OPTIONS_NONE;
+
+
+	// 较高版本的 D2D 核心工厂，它是 D2D 渲染的起点和资源管理中心，负责创建所有 D2D 绘图需要的对象，并管理全局调试选项
+	ComPtr<ID2D1Factory7> m_D2DFactory;
+	// 较高版本的 D2D 设备，负责创建 D2DDeviceContext，管理全局性资源与状态
+	ComPtr<ID2D1Device6> m_D2DDevice;
+	// 较高版本的 D2D 设备上下文，负责绘图命令，管理绘图状态，连接资源与目标
+	ComPtr<ID2D1DeviceContext6> m_D2DDeviceContext;
+
+	UINT DPI = 0;	// 窗口 DPI
+
+	// D3D11 用于包装的渲染目标资源 (后台缓冲)，数量和 D3D12 一致
+	// Wrapped 包装，是一种软件设计思想，意思类似于将 D3D12 资源层层包装 (转换) 成 D2D 能用的资源接口
+	// 但 D2D 内部并不拥有这个资源的真实显存，只是得到了 D3D12 资源翻译后的使用权，资源还是 D3D12 的，一点都没变过
+	// Wrapped 包装本质上只是做了一个翻译，没有创建新的资源，和上面的 CallBackWrapper 转换回调函数并塞进 Win32API 原理是一样的
+	ComPtr<ID3D11Resource> m_D3D11WrappedRenderTarget[3];
+	// D2D 渲染目标资源 (后台缓冲)，数量和 D3D12 一致，别看接口类型不同，实际指向的显存 (数据来源) 仍然是 D3D12RenderTarget
+	ComPtr<ID2D1Bitmap1> m_D2DRenderTarget[3];
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	ComPtr<IWICImagingFactory> m_WICFactory;				// WIC 工厂
+	ComPtr<IWICBitmapDecoder> m_WICBitmapDecoder;			// 位图解码器
+	ComPtr<IWICBitmapFrameDecode> m_WICBitmapDecodeFrame;	// 由解码器得到的单个位图帧
+	ComPtr<IWICFormatConverter> m_WICFormatConverter;		// 位图转换器
+	ComPtr<IWICBitmapFlipRotator> m_WICBitmapFlipRotator;	// 位图镜像翻转器，用于翻转 HUD 位图绘制右侧饱食度
+
+
+	// 物品栏所属的位图，包括 9 格快捷物品栏，和一个选中框
+	ComPtr<ID2D1Bitmap> m_InventoryBitmap;
+	// HUD (Heads-up display，抬头显示器) 界面元素所属的位图，包含生命值、护甲值、饥饿值、经验槽等
+	// HUD 在游戏中指的就是一直叠加在游戏画面上，为你实时显示各种状态信息的界面元素
+	ComPtr<ID2D1Bitmap> m_HUDBitmap;
+	// 水平镜像翻转的 HUD 界面位图，用于绘制右侧饱食度
+	ComPtr<ID2D1Bitmap> m_FlippedHUDBitmap;
+
+	// 物品栏展示方块的位图
+	std::vector<ComPtr<ID2D1Bitmap>> m_InventoryBlockBitmaps;
+
+
+	// m_InventoryBitmap 的图片文件名 (相对路径)
+	std::wstring InventoryBitmapFileName = L"UIresource/widgets.png";
+	// m_HUDBitmap 和 m_FlippedHUDBitmap 的图片文件名 (相对路径)
+	std::wstring HUDBitmapFileName = L"UIresource/icons.png";
+
+
+	// 物品栏方块使用的纹理
+	std::vector<std::wstring> InventoryBlockNames = 
+	{
+		// 0.熔炉
+		L"resource/furnace_front_off.png",
+		L"resource/furnace_side.png",
+		L"resource/furnace_top.png",
+		// 1.工作台
+		L"resource/crafting_table_front.png",
+		L"resource/crafting_table_side.png",
+		L"resource/crafting_table_top.png",
+		// 2.TNT
+		L"resource/tnt_side.png",
+		L"resource/tnt_top.png",
+		// 3.活塞
+		L"resource/piston_side.png",
+		L"resource/piston_top_normal.png",
+		// 4.石英块
+		L"resource/quartz_block_side.png",
+		L"resource/quartz_block_top.png",
+		// 5.发射器
+		L"resource/piston_bottom.png",
+		L"resource/dispenser_front_horizontal.png",
+		// 6.书架
+		L"resource/planks_oak.png",
+		L"resource/bookshelf.png",
+		// 7.钻石原矿
+		L"resource/diamond_ore.png",
+		// 8.萤石
+		L"resource/glowstone.png"
+	};
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 本次我们要渲染物品栏内的方块，之所以在 2D 平面上也能呈现立体感，是因为它们使用轴侧视图
+	// 物品栏中的方块以固定的等轴测视角显示，这样能使 正面 (+X)，后面 (-Z)，上面 (+Y) 同时扁平化呈现在平面上
+	// 我们需要提供正方体数据，对这个正方体进行等轴侧变换，再往这个扁平化的正方体贴纹理 (D2D 位图)
+
+	// 等轴变换矩阵 (模型空间 -> 屏幕空间)
+	XMMATRIX IsometricMatrix;
+
+
+	// 方块三个面 { 正面 (+X)，后面 (-Z)，上面 (+Y) } NDC 空间下的顶点位置数据
+	// 顺序遵循 左上角 -> 右上角 -> 右下角 -> 左下角
+	std::vector<XMVECTOR> BlockItemsVertex =
+	{
+		// 正面 (+X)
+		XMVectorSet(1, 1, -1, 1),
+		XMVectorSet(1, 1, 1, 1),
+		XMVectorSet(1, -1, 1, 1),
+		XMVectorSet(1, -1, -1, 1),
+
+		// 后面 (-Z)
+		XMVectorSet(-1, 1, -1, 1),
+		XMVectorSet(1, 1, -1, 1),
+		XMVectorSet(1, -1, -1, 1),
+		XMVectorSet(-1, -1, -1, 1),
+
+		// 上面 (+Y)
+		XMVectorSet(-1, 1, -1, 1),
+		XMVectorSet(-1, 1, 1, 1),
+		XMVectorSet(1, 1, 1, 1),
+		XMVectorSet(1, 1, -1, 1)
+	};
+
+
+	// 物品栏立方体面结构体，只有一个长度为 3 的 UINT 数组成员
+	// 描述一个方块三个面在 m_InventoryBlockBitmaps 的索引
+	struct ITEMCUBEFACE
+	{
+		// 三个立方体面对应的 D2D 位图在 m_InventoryBlockBitmaps 中的位置
+		// 数组索引 0-2 分别对应右面 (+X)，后面 (-Z)，上面 (+Y)
+		UINT FaceBitmapIndex[3];
+	};
+
+
+	// 物品栏 9 个方块物品的方块类型-位图索引组
+	std::vector<ITEMCUBEFACE> BlockBitmap_IndexGroup =
+	{
+		// 右面 (+X) -> 后面 (-Z) -> 上面 (+Y)
+
+		{0, 1, 2},		// 0.熔炉
+		{3, 4, 5},		// 1.工作台
+		{6, 6, 7},		// 2.TNT
+		{8, 8, 9},		// 3.活塞
+		{10, 10, 11},	// 4.石英块
+		{13, 12, 12},	// 5.发射器
+		{15, 15, 14},	// 6.书架
+		{16, 16, 16},	// 7.钻石原矿
+		{17, 17, 17}	// 8.活塞
+	};
+
+
+	// 物品栏 9 个方块物品的预渲染等轴立体图标
+	std::vector<ComPtr<ID2D1Bitmap>> m_InventoryBlockIcons;
+
+	// 位图渲染目标，用于生成并渲染方块图标，位图渲染目标也拥有 m_D2DDeviceContext 相似的能力
+	ComPtr<ID2D1BitmapRenderTarget> m_BitmapRenderTarget;
+
+
+	const float Slot_InnerSpace_Width = 15.0f;	// 物品栏空槽的宽度
+	const float Slot_InnerSpace_Height = 15.0f;	// 物品栏空槽的高度
+
+	// 物品栏 (位图渲染目标) 的方框大小
+	D2D1_SIZE_F Slot_InnerSpace_Size = { Slot_InnerSpace_Width , Slot_InnerSpace_Height };
+
+
+	const float BlockBitmap_Width = 16.0f;		// 方块位图的宽度
+	const float BlockBitmap_Height = 16.0f;		// 方块位图的宽度
+
+	// 方块纹理源图范围
+	D2D1_RECT_F Source_BlockItems_Rect = { 0, 0, BlockBitmap_Width, BlockBitmap_Height };
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	float Components_Scale_Rate = 2.5;					// 组件放大倍数
+	UINT Selected_Slot_Index = 0;						// 当前选择框的索引 (0-8)
+
+
+	const float HotBar_Width = 180.0f;					// 快捷物品栏宽度 (不要黑底)
+	const float HotBar_Height = 20.0f;					// 快捷物品栏高度 (不要黑底)
+	D2D_RECT_F Source_HotBarInventory_Rect = {};		// 9 格快捷物品栏的源图区域范围
+	D2D_RECT_F Destination_HotBarInventory_Rect = {};	// 9 格快捷物品栏的目标区域范围
+
+
+	const float Slot_Width = 22.0f;						// 物品选择框的宽度 (不要黑底)
+	const float Slot_Height = 22.0f;					// 物品选择框的高度 (不要黑底)
+	D2D_RECT_F Source_Slot_Rect = {};					// 物品选择框的源图范围
+	D2D_RECT_F Destination_Slot_Rect = {};				// 物品选择框的目标范围
+
+
+	const float XPBar_Width = 182.0f;					// 经验条宽度
+	const float XPBar_Height = 5.0f;					// 经验条高度
+	D2D_RECT_F Source_XPBar_Rect = {};					// 经验条的源图范围
+	D2D_RECT_F Destination_XPBar_Rect = {};				// 经验条的目标范围
+
+
+	const float Heart_Width = 9.0f;						// HUD 生命值宽度 (空心/实心 共用)
+	const float Heart_Height = 9.0f;					// HUD 生命值高度 (空心/实心 共用)
+	D2D_RECT_F Source_EmptyHeart_Rect = {};				// HUD 生命值空心槽的源图范围 (不共用)
+	D2D_RECT_F Source_FullHeart_Rect = {};				// HUD 生命值实心的源图范围 (不共用)
+	D2D_RECT_F Destination_Heart_Rect = {};				// HUD 生命值空心槽/实心目标范围 (空心/实心 共用)
+
+
+	const float HurgerBar_Width = 9.0f;					// HUD 饥饿值宽度
+	const float HurgerBar_Height = 9.0f;				// HUD 饥饿值高度
+	D2D_RECT_F Source_HurgerBar_Rect = {};				// HUD 饥饿值槽的源图范围
+	D2D_RECT_F Destination_HurgerBar_Rect = {};			// HUD 饥饿值槽的目标范围
+
+
+	const float CrossHair_Width = 9.0f;					// 十字准心宽度
+	const float CrossHair_Height = 9.0f;				// 十字准心高度
+	D2D_RECT_F Source_CrossHair_Rect = {};				// 十字准心的源图范围
+	D2D_RECT_F Destination_CrossHair_Rect = {};			// 十字准心的目标范围
+
+
+	D2D_RECT_F Source_InnerSpace_Rect = {};				// 物品栏空槽的源图范围
+	D2D_RECT_F Destination_InnerSpace_Rect = {};		// 物品栏空槽的目标范围
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+public:
+
+	// 利用 D3D11On12 函数搭桥引线，在 D3D12Device 的基础上创建 D3D11Device 和 D3D11On12 设备
+	// 利用此函数创建的 D3D11Device 可以操作 D3D12Device 拥有的所有资源 (例如渲染目标)
+	// 这意味着利用这个 D3D11Device 创建的 D2DDevice 可以直接画到渲染目标上，实现 D2D 与 D3D12 的同屏显示
+	void D2D_STEP01_CreateD3D11Device(ComPtr<ID3D12Device4>& m_D3D12Device, ComPtr<ID3D12CommandQueue>& m_CommandQueue)
+	{
+#if defined(_DEBUG)		// 如果是 DEBUG 调试，增加调试标志
+		m_D3D11CreateDeviceFlag |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+		// D2D 的默认格式是 DXGI_FORMAT_B8G8R8A8_UNORM，加上这个标志，让 D3D11 创建的渲染目标支持 BGRA 格式
+		m_D3D11CreateDeviceFlag |= D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+
+		// 临时创建的 D3D11 低版本设备，当工具人创建高版本设备用的
+		ComPtr<ID3D11Device> _temp_D3D11Device;
+		// 临时创建的 D3D11 低版本设备上下文，当工具人创建高版本设备上下文用的
+		ComPtr<ID3D11DeviceContext> _temp_D3D11DeviceContext;
+
+
+		// 在 D3D12Device 的基础上创建 D3D11Device，为后续的 D2D 设备创建打下基础
+		// 注意，第五个参数不能使用 &m_CommandQueue，& = ReleaseAndGetAddressOf()
+		// 第五个参数填命令队列，和上面交换链原理是一样的，都是将交换链/设备上下文刷新并绑定命令队列
+		D3D11On12CreateDevice(m_D3D12Device.Get(), m_D3D11CreateDeviceFlag,
+			nullptr, 0, reinterpret_cast<IUnknown**>(m_CommandQueue.GetAddressOf()),
+			1, 0, &_temp_D3D11Device, &_temp_D3D11DeviceContext, nullptr);
+
+
+		// 通过 As 方法将数据继承到高版本设备接口
+		_temp_D3D11Device.As(&m_D3D11Device);
+		_temp_D3D11DeviceContext.As(&m_D3D11DeviceContext);
+
+		// 注意这里！这里要把 D3D11Device 的数据继承给 D3D11On12Device！
+		m_D3D11Device.As(&m_D3D11On12Device);
+	}
+
+
+
+	// 利用 D2D_STEP01_CreateD3D11Device 创建的 D3D11On12 设备，创建 D2D 相关设备
+	void D2D_STEP02_CreateD2DDevice()
+	{
+#if defined(_DEBUG)		// 如果是 DEBUG 调试，D2D 工厂选项增加调试等级，D2D1_DEBUG_LEVEL_INFORMATION 表示提供全部调试信息
+		m_D2DCreateFactoryOptions.debugLevel = D2D1_DEBUG_LEVEL_INFORMATION;
+#endif
+
+		// 创建 D2D 工厂 (单线程)，注意我们用了这个函数的模板函数重载版本，使用这个版本可以直接在模板参数指定创建工厂的接口类型
+		// 模板参数 <ID2D1Factory7> 就是我们指定要创建的工厂接口类型
+		D2D1CreateFactory<ID2D1Factory7>(D2D1_FACTORY_TYPE_SINGLE_THREADED,
+			m_D2DCreateFactoryOptions, &m_D2DFactory);
+
+
+		// 临时创建的 DXGIDevice (工具人)，D2D 需要依赖 DXGI 来确保与底层的 D3D 设备相关联，获得底层设备的完整能力，并保持兼容性
+		ComPtr<IDXGIDevice> _temp_DXGIDevice;
+		// D3D11On12 设备的数据继承到 DXGIDevice，传递这个可以验证传入设备是否支持 D2D 所需功能
+		m_D3D11On12Device.As(&_temp_DXGIDevice);
+
+
+		// D2D 工厂创建 D2DDevice 设备，注意这个需要传递 _temp_DXGIDevice
+		m_D2DFactory->CreateDevice(_temp_DXGIDevice.Get(), &m_D2DDevice);
+		// D2D 设备创建 D2DDeviceContext 设备上下文
+		m_D2DDevice->CreateDeviceContext(m_D2DCreateDeviceContextOptions, &m_D2DDeviceContext);
+	}
+
+
+
+	// 在上面各种设备的基础上，逐步翻译、包装、转化并绑定 D3D12RenderTarget 到 D2DRenderTarget 上
+	void D2D_STEP03_CreateD2DRenderTarget(HWND MainWindowHwnd, ComPtr<ID3D12Resource>(&m_D3D12RenderTarget)[3])
+	{
+		// 获取 DPI (Dots Per Inch 每英寸点数)，它描述了显示设备的像素密度，即在一英寸的长度内可以排列多少个像素点
+		// 在 Direct2D 以及一般的 UI 开发中，DPI 至关重要，因为它直接影响着文字、图形和 UI 元素在不同显示器上的物理尺寸
+		// DPI 与屏幕分辨率是紧密相关的，如果不考虑 DPI，同一个应用在低分辨率和高分辨率屏幕上显示时，
+		// 元素要么太小 (在高 DPI 屏上) 要么太大 (在低 DPI 屏上)，用户体验会很差
+
+		// 利用 GetDpiForWindow 获取窗口的 DPI
+		DPI = GetDpiForWindow(MainWindowHwnd);
+
+
+		// D2D 位图属性，渲染目标其实就是一个特殊纹理 (2D 位图)，这一点在 D3D11 和 D2D 道理也是一样的
+		D2D1_BITMAP_PROPERTIES1 BitmapProperties = {};
+		// 设置位图选项 (标志)
+		// D2D1_BITMAP_OPTIONS_TARGET 表示该位图可以被设置为渲染目标
+		// D2D1_BITMAP_OPTIONS_CANNOT_DRAW 表示该位图不能作为绘制操作的来源，
+		// 不能用于 ID2D1DeviceContext::DrawBitmap 做输入参数，更不能用于创建 ID2D1BitmapBrush 位图画刷 (后面的教程再涉及)
+		// 指定这两个标志，表示创建一个专用渲染目标，作为最终输出的画板，而不是作为中间资源被反复利用
+		// Direct2D 驱动层可能会因此进行一些优化，比如不需要为它创建着色器资源描述符 (SRV Descriptor)，从而节省资源
+		BitmapProperties.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
+
+		// 渲染目标的 DXGI_FORMAT 指定 DXGI_FORMAT_UNKNOWN，会自动匹配表面格式
+		BitmapProperties.pixelFormat.format = DXGI_FORMAT_UNKNOWN;
+		// 指定像素颜色值采用预乘 alpha 格式存储，相当于渲染目标上色会自动进行 SrcRGB * SrcA 的操作
+		// 传统的直接 alpha (或称非预乘、straight alpha) 格式中，RGB 分量是独立于 alpha 存储的，合成时需要实时计算
+		// 预乘 alpha 可以避免在合成时因颜色与 alpha 相乘而产生的色偏或边缘锯齿问题
+		// 例如，在绘制带有半透明边缘的纹理时，直接 alpha 可能导致边缘出现暗色光晕，而预乘格式已经将颜色与透明度融合，合成结果更自然
+		// 预乘后的颜色可以直接与背景进行加法混合 (SrcRGB + DstRGB * (1 - SrcA))，可以节省一次乘法操作 (虽然性能提升微乎其微)
+		// 许多 GPU 内部处理纹理时更倾向于预乘格式，可以减少着色器中的计算
+		BitmapProperties.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+
+		// 设置渲染目标 x,y 轴的 DPI，两个都是一样的
+		BitmapProperties.dpiX = DPI;
+		BitmapProperties.dpiY = DPI;
+
+		// 用于色彩空间转换的颜色上下文，我们不需要，填 nullptr
+		BitmapProperties.colorContext = nullptr;
+
+
+		// 先创建 D3D11 的渲染目标，D3D12 有多少后台窗口缓冲 (渲染目标)，D3D11 和 D2D 也要创建多少接口
+		for (UINT i = 0; i < 3; i++)
+		{
+			// 用于 D3D11 包装渲染目标资源的标志
+			D3D11_RESOURCE_FLAGS D3D11WrappedBackBufferFlag = { D3D11_BIND_RENDER_TARGET };
+
+			// 通过 D3D11On12 设备创建包装层资源，D2D 只能识别 DXGI 风格的资源，我们需要进行第一次翻译
+			// 我们需要通过 D3D11On12 设备将 D3D12RenderTarget 接口包装 (翻译) 成 D3D11WrappedResource 接口
+			// 注意要填转换前后状态：转换前是 RENDER_TARGET 渲染目标状态，转换后是 PRESENT 呈现状态，后面有用！
+			m_D3D11On12Device->CreateWrappedResource(m_D3D12RenderTarget[i].Get(),
+				&D3D11WrappedBackBufferFlag, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT,
+				IID_PPV_ARGS(&m_D3D11WrappedRenderTarget[i]));
+
+			// 用于临时转化和翻译用的 DXGISurface 接口，对于上面那几个渲染目标资源，D2D 只认 DXGISurface，我们需要先转化成这个
+			// DXGISurface 是 DXGI 为所有图形 API 定义的，用于表示 2D 图像数据的统一接口 (如何转化不同接口就是另外一回事了)
+			ComPtr<IDXGISurface> _temp_DXGISurface;
+
+			// 将 D3D11WrappedResource 的数据继承到 DXGISurface
+			m_D3D11WrappedRenderTarget[i].As(&_temp_DXGISurface);
+
+			// 利用 D2DDeviceContext 将 DXGISurface 接口转化成 D2DRenderTarget，这样我们就完成了渲染目标从 D3D12 到 D2D 的翻译
+			m_D2DDeviceContext->CreateBitmapFromDxgiSurface(_temp_DXGISurface.Get(),
+				BitmapProperties, &m_D2DRenderTarget[i]);
+		}
+	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// WIC 从 resource 读取 UI 图集，然后通过 D2DDeviceContext 的成员方法创建并转化成 D2DBitmap
+	// Atlas 图集，相当于包含所有界面小元素的大图，是纹理图片的一种形式
+	bool D2D_STEP04_LoadUIAtlasIntoD2DBitmaps()
+	{
+		// 先创建 WIC 工厂，WIC 工厂每个进程实例只能持有一次，重复创建会报错
+		CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_WICFactory));
+
+		// 创建 m_InventoryBitmap
+		{
+			// 读取图片数据并创建解码器
+			HRESULT hr = m_WICFactory->CreateDecoderFromFilename(InventoryBitmapFileName.c_str(), nullptr, GENERIC_READ,
+				WICDecodeMetadataCacheOnDemand, &m_WICBitmapDecoder);
+
+
+			std::wostringstream output_str;		// 用于格式化字符串
+			switch (hr)
+			{
+				case S_OK: break;	// 解码成功，直接 break 进入下一步即可
+
+				case HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND):	// 文件找不到
+					output_str << L"找不到文件 " << InventoryBitmapFileName << L" ！请检查文件路径是否有误！";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+
+				case HRESULT_FROM_WIN32(ERROR_FILE_CORRUPT):	// 文件句柄正在被另一个应用进程占用
+					output_str << L"文件 " << InventoryBitmapFileName << L" 已经被另一个应用进程打开并占用了！请先关闭那个应用进程！";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+
+				case WINCODEC_ERR_COMPONENTNOTFOUND:			// 找不到可解码的组件，说明这不是有效的图像文件
+					output_str << L"文件 " << InventoryBitmapFileName << L" 不是有效的图像文件，无法解码！请检查文件是否为图像文件！";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+
+				default:			// 发生其他未知错误
+					output_str << L"文件 " << InventoryBitmapFileName << L" 解码失败！发生了其他错误，错误码：" << hr << L" ，请查阅微软官方文档。";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+			}
+
+
+			// 读取一帧图片
+			m_WICBitmapDecoder->GetFrame(0, &m_WICBitmapDecodeFrame);
+
+			// 创建转换器
+			m_WICFactory->CreateFormatConverter(&m_WICFormatConverter);
+
+			// 将图片进行转换，注意 D2D 位图格式都必须是 GUID_WICPixelFormat32bppPBGRA
+			// 进行转换后，位图数据会存储在 m_WICFormatConverter 上面
+			m_WICFormatConverter->Initialize(m_WICBitmapDecodeFrame.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
+				nullptr, 0, WICBitmapPaletteTypeCustom);
+
+			// D2D 设备上下文从 WIC 位图资源中创建 D2DBitmap，这个 m_WICFormatConverter 其实是 IWICBitmapSource 的子类
+			// m_WICFormatConverter.Get() 相当于传递指向子类的指针，这样就能创建 D2D 位图了
+			m_D2DDeviceContext->CreateBitmapFromWicBitmap(m_WICFormatConverter.Get(), &m_InventoryBitmap);
+		}
+
+
+		// 创建 m_HUDBitmap，道理和上面一样的
+		{
+			HRESULT hr = m_WICFactory->CreateDecoderFromFilename(HUDBitmapFileName.c_str(), nullptr, GENERIC_READ,
+				WICDecodeMetadataCacheOnDemand, &m_WICBitmapDecoder);
+
+
+			std::wostringstream output_str;		// 用于格式化字符串
+			switch (hr)
+			{
+				case S_OK: break;	// 解码成功，直接 break 进入下一步即可
+
+				case HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND):	// 文件找不到
+					output_str << L"找不到文件 " << InventoryBitmapFileName << L" ！请检查文件路径是否有误！";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+
+				case HRESULT_FROM_WIN32(ERROR_FILE_CORRUPT):	// 文件句柄正在被另一个应用进程占用
+					output_str << L"文件 " << InventoryBitmapFileName << L" 已经被另一个应用进程打开并占用了！请先关闭那个应用进程！";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+
+				case WINCODEC_ERR_COMPONENTNOTFOUND:			// 找不到可解码的组件，说明这不是有效的图像文件
+					output_str << L"文件 " << InventoryBitmapFileName << L" 不是有效的图像文件，无法解码！请检查文件是否为图像文件！";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+
+				default:			// 发生其他未知错误
+					output_str << L"文件 " << InventoryBitmapFileName << L" 解码失败！发生了其他错误，错误码：" << hr << L" ，请查阅微软官方文档。";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+			}
+
+
+			m_WICBitmapDecoder->GetFrame(0, &m_WICBitmapDecodeFrame);
+
+			m_WICFactory->CreateFormatConverter(&m_WICFormatConverter);
+
+			m_WICFormatConverter->Initialize(m_WICBitmapDecodeFrame.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
+				nullptr, 0, WICBitmapPaletteTypeCustom);
+
+			m_D2DDeviceContext->CreateBitmapFromWicBitmap(m_WICFormatConverter.Get(), &m_HUDBitmap);
+		}
+
+
+		// 创建 m_FlippedHUDBitmap，将上面已经创建好的 m_HUDBitmap 进行镜像翻转，并存储到新的 D2DBitmap 接口
+		{
+			// WIC 工厂先创建翻转器
+			m_WICFactory->CreateBitmapFlipRotator(&m_WICBitmapFlipRotator);
+
+			// 翻转器初始化，将转换后的位图镜像翻转，WICBitmapTransformFlipHorizontal 表示水平镜像翻转
+			m_WICBitmapFlipRotator->Initialize(m_WICFormatConverter.Get(), WICBitmapTransformFlipHorizontal);
+
+			// D2D 设备上下文从 WIC 位图资源中创建 D2DBitmap，这个 m_WICBitmapFlipRotator 也是 IWICBitmapSource 的子类
+			m_D2DDeviceContext->CreateBitmapFromWicBitmap(m_WICBitmapFlipRotator.Get(), &m_FlippedHUDBitmap);
+		}
+
+
+		// 创建 m_InventoryBlockBitmaps，用于物品栏方块物品
+		{
+			// m_InventoryBlockBitmaps 先重置大小
+			m_InventoryBlockBitmaps.resize(InventoryBlockNames.size());
+
+			// 遍历并逐一加载
+			for (UINT i = 0; i < InventoryBlockNames.size(); i++)
+			{
+				HRESULT hr = m_WICFactory->CreateDecoderFromFilename(InventoryBlockNames[i].c_str(), nullptr, GENERIC_READ,
+					WICDecodeMetadataCacheOnDemand, &m_WICBitmapDecoder);
+
+
+				std::wostringstream output_str;		// 用于格式化字符串
+				switch (hr)
+				{
+					case S_OK: break;	// 解码成功，直接 break 进入下一步即可
+
+					case HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND):	// 文件找不到
+						output_str << L"找不到文件 " << InventoryBitmapFileName << L" ！请检查文件路径是否有误！";
+						MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+						return false;
+
+					case HRESULT_FROM_WIN32(ERROR_FILE_CORRUPT):	// 文件句柄正在被另一个应用进程占用
+						output_str << L"文件 " << InventoryBitmapFileName << L" 已经被另一个应用进程打开并占用了！请先关闭那个应用进程！";
+						MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+						return false;
+
+					case WINCODEC_ERR_COMPONENTNOTFOUND:			// 找不到可解码的组件，说明这不是有效的图像文件
+						output_str << L"文件 " << InventoryBitmapFileName << L" 不是有效的图像文件，无法解码！请检查文件是否为图像文件！";
+						MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+						return false;
+
+					default:			// 发生其他未知错误
+						output_str << L"文件 " << InventoryBitmapFileName << L" 解码失败！发生了其他错误，错误码：" << hr << L" ，请查阅微软官方文档。";
+						MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+						return false;
+				}
+
+
+				m_WICBitmapDecoder->GetFrame(0, &m_WICBitmapDecodeFrame);
+
+				m_WICFactory->CreateFormatConverter(&m_WICFormatConverter);
+
+				m_WICFormatConverter->Initialize(m_WICBitmapDecodeFrame.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
+					nullptr, 0, WICBitmapPaletteTypeCustom);
+
+				m_D2DDeviceContext->CreateBitmapFromWicBitmap(m_WICFormatConverter.Get(), &m_InventoryBlockBitmaps[i]);
+			}
+		}
+
+
+		// D2DBitmap 都加载成功，返回 true
+		return true;
+	}
+
+
+
+	// DX12Engine 传递要加载的纹理名，WIC 再次读取图片，并将它们转换成 DX12 可用的 WICBitmapSource
+	// vector 是一个 inout 输入输出参数，外部 (DX12Engine) 提供 vector，此函数逐一创建 vector 中的元素
+	bool D2D_STEP05_LoadTextureIntoWICBitmaps(
+		const std::vector<std::wstring>& TextureNames,
+		std::vector<ComPtr<IWICBitmapSource>>& TextureGroup)
+	{
+		// 先获取原先 TextureGroup 拥有元素的数量
+		size_t OriginalTextureGroupSize = TextureGroup.size();
+
+		// TextureGroup 先重置大小
+		TextureGroup.resize(OriginalTextureGroupSize + TextureNames.size());
+
+		// 循环遍历加载
+		for (UINT i = 0; i < TextureNames.size(); i++)
+		{
+			// 先创建图片解码器，并将图片文件加载到内存
+			HRESULT hr = m_WICFactory->CreateDecoderFromFilename(TextureNames[i].c_str(), nullptr, GENERIC_READ,
+				WICDecodeMetadataCacheOnDemand, &m_WICBitmapDecoder);
+
+			// 用于格式化字符串
+			std::wostringstream output_str;
+			// 如果创建失败，就检查 HRESULT 返回值并提示信息
+			switch (hr)
+			{
+				case S_OK: break;	// 解码成功，直接 break 进入下一步即可
+
+				case HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND):	// 文件找不到
+					output_str << L"找不到文件 " << TextureNames[i].c_str() << L" ！请检查文件路径是否有误！";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+
+				case HRESULT_FROM_WIN32(ERROR_FILE_CORRUPT):	// 文件句柄正在被另一个应用进程占用
+					output_str << L"文件 " << TextureNames[i].c_str() << L" 已经被另一个应用进程打开并占用了！请先关闭那个应用进程！";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+
+				case WINCODEC_ERR_COMPONENTNOTFOUND:			// 找不到可解码的组件，说明这不是有效的图像文件
+					output_str << L"文件 " << TextureNames[i].c_str() << L" 不是有效的图像文件，无法解码！请检查文件是否为图像文件！";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+
+				default:			// 发生其他未知错误
+					output_str << L"文件 " << TextureNames[i].c_str() << L" 解码失败！发生了其他错误，错误码：" << hr << L" ，请查阅微软官方文档。";
+					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
+					return false;
+			}
+
+			// 从解码器中获取一帧图片
+			m_WICBitmapDecoder->GetFrame(0, &m_WICBitmapDecodeFrame);
+
+
+			// 获取图片格式，并将它转化为 DX12 能接受的纹理格式
+			WICPixelFormatGUID SourceFormat = {};				// 源图格式
+			GUID TargetFormat = {};								// 目标格式
+
+			m_WICBitmapDecodeFrame->GetPixelFormat(&SourceFormat);						// 获取源图格式
+
+			// 获取目标格式，如果没有可支持的目标格式，就返回 false 并提示信息
+			if (DX12TextureHelper::GetTargetPixelFormat(&SourceFormat, &TargetFormat) == false)
+			{
+				::MessageBox(NULL, L"此纹理不受支持!", L"提示", MB_OK);
+				return false;
+			}
+
+
+			// 获取目标格式后，将纹理转换为目标格式，使其能被 DX12 使用
+			m_WICFactory->CreateFormatConverter(&m_WICFormatConverter);
+			// 初始化转换器，实际上是把位图进行了转换
+			m_WICFormatConverter->Initialize(m_WICBitmapDecodeFrame.Get(), TargetFormat, WICBitmapDitherTypeNone,
+				nullptr, 0.0f, WICBitmapPaletteTypeCustom);
+			// 将位图数据继承到 WIC 位图资源，我们等会要在 WIC 位图资源上获取信息
+			m_WICFormatConverter.As(&TextureGroup[OriginalTextureGroupSize + i]);
+		}
+
+		// WICBitmapSource 都加载成功，返回 true
+		return true;
+	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 计算等轴变换矩阵 (模型空间 -> 屏幕空间)，并对方块物品顶点数据进行等轴变换
+	// 这个等轴变换属于正交投影，是轴侧投影的一个特例，没有"近大远小"的透视效果
+	// 等轴测投影中，三个坐标轴的缩放因子相等，且两两夹角均为 120°，从而呈现出独特的立体感
+	void D2D_STEP06_CalcIsometricMatrixAndTransform()
+	{
+		// 先绕 y 轴旋转 45°，XM_PIDIV4 = 45°，让正面和后面可见
+		XMMATRIX RotateY_Matrix = XMMatrixRotationY(XM_PIDIV4);
+		// 再绕 x 轴旋转 -30°，XM_PIDIV2 = 90°，让顶面可见
+		XMMATRIX RotateX_Matrix = XMMatrixRotationX(-XM_PIDIV2 / 3.0);
+		// 构建旋转矩阵
+		XMMATRIX RotationMatrix = RotateY_Matrix * RotateX_Matrix;
+
+		// 构建缩放矩阵 (x,y 轴缩放系数相同，y 轴是负数是因为 D2D 坐标系 y 轴朝下，需要指定负数翻转位图)
+		// 这个缩放系数 5 的计算方法:
+		// 模型空间下方块的边长是 2 (详情见上文 BlockItemsVertex)，y 轴旋转 45° 后顶面边长 2 * sqrt(2)
+		// 2 * sqrt(2) * 5 = 10 * sqrt(2) = sqrt(200) < sqrt(225) = 15
+		// 恰好留了 (sqrt(225) - sqrt(200)) / 2 的空隙，差不多等于 0.5
+		XMMATRIX ScalingMatrix = XMMatrixScaling(5, -5, 1);
+
+		// 构建平移矩阵 (一个物品槽内部空位 15x15，从物品槽左上角移到正中心偏左 0.5 像素)
+		XMMATRIX TranslationMatrix = XMMatrixTranslation(7, 7, 0);
+
+		// 最终构建等轴变换矩阵 (旋转 -> 缩放 -> 平移，顺序不满足乘法交换律)
+		// 注意！均匀缩放可以和旋转矩阵交换位置，结果不变；非均匀缩放不可以交换！
+		IsometricMatrix = RotationMatrix * ScalingMatrix * TranslationMatrix;
+
+
+		// 对每个顶点进行等轴变换
+		for (UINT i = 0; i < BlockItemsVertex.size(); i++)
+		{
+			BlockItemsVertex[i] = XMVector3TransformCoord(BlockItemsVertex[i], IsometricMatrix);
+		}
+	}
+
+
+
+	// 对每个方块物品的顶点数据进行等轴变换，并绘制相应面的 D2D 位图，生成预渲染立体图标
+	void D2D_STEP07_GenerateBlockItemIcons()
+	{
+		// m_InventoryBlockIcons 重置大小为 9，等会要进行位图创建
+		m_InventoryBlockIcons.resize(BlockBitmap_IndexGroup.size());
+
+
+		// 循环遍历每个方块，生成 9 个图标
+		// BlockIndex 是每个方块 (m_InventoryBlockIcons/BlockBitmap_IndexGroup 每个元素) 的索引
+		for (UINT BlockIndex = 0; BlockIndex < BlockBitmap_IndexGroup.size(); BlockIndex++)
+		{
+			// 为每个不同的方块图标，创建一个 D2D 可兼容的新位图渲染目标 
+			// (Compatible 可兼容的，早些时候 D3D10、D3D11 的渲染目标资源绑定，渲染到纹理也是它做的)
+			m_D2DDeviceContext->CreateCompatibleRenderTarget(
+				D2D1::SizeF(Slot_InnerSpace_Width, Slot_InnerSpace_Height),	// 位图渲染目标的大小 (15x15)
+				D2D1::SizeU(DPI, DPI),										// 位图渲染目标 DPI 大小
+				m_InventoryBlockBitmaps[0]->GetPixelFormat(),				// 位图渲染目标的 D2D 格式，要和原资源一致									
+				&m_BitmapRenderTarget										// 要创建的位图渲染目标接口
+			);
+
+			// 位图渲染目标开启渲染
+			m_BitmapRenderTarget->BeginDraw();
+
+			// 位图渲染目标清空背景为透明黑色 (不填参数默认透明黑色)，这样我们就得到了背景透明的位图，后续方便混合
+			m_BitmapRenderTarget->Clear();
+			
+
+			// 循环遍历每个面，绘制三个面到位图渲染目标中 { 正面 (+X)，后面 (-Z)，上面 (+Y) }
+			// 到下一个面的步长是 4，所以不同面顶点计算式 VertexIndex = FaceIndex * 4 + ConnerPointIndex
+			for (UINT FaceIndex = 0; FaceIndex < 3; FaceIndex++)
+			{
+				// 提取每个面左上角 P0 (0, 0)，右上角 P1 (w, 0)，左下角 P2 (0, h) 的坐标
+				XMFLOAT2 P0, P1, P2;
+				XMStoreFloat2(&P0, BlockItemsVertex[FaceIndex * 4 + 0]);	// 左上角
+				XMStoreFloat2(&P1, BlockItemsVertex[FaceIndex * 4 + 1]);	// 右上角
+				XMStoreFloat2(&P2, BlockItemsVertex[FaceIndex * 4 + 3]);	// 左下角
+
+
+				// 预渲染的绘制需要 3x2 仿射矩阵，由于 2D 变换最后一列是固定的 [0, 0, 1]，D2D 索性把它简化了
+				// 这个二维仿射变换包含缩放，旋转，错切与平移，它表示将 纹理位图 (矩形) 映射到 方块面平行四边形
+				// 你会疑惑方块面明明有四个点，为什么只用了其中三个，因为三个点就可以唯一确定一个仿射变换了
+				// 关于矩阵中每一项的推导过程，可以问 AI
+				D2D1_MATRIX_3X2_F BitmapAffineMatrix = {
+					(P1.x - P0.x) / BlockBitmap_Width, (P1.y - P0.y) / BlockBitmap_Width,
+					(P2.x - P0.x) / BlockBitmap_Height, (P2.y - P0.y) / BlockBitmap_Height,
+					P0.x, P0.y
+				};
+
+
+				// 位图渲染目标设置并更新仿射矩阵，接下来会影响到下面的渲染操作
+				m_BitmapRenderTarget->SetTransform(BitmapAffineMatrix);
+
+				// 获得对应方块下某个面对应的纹理 (位图) 索引
+				UINT FaceTexture_InBitmapsArrayIndex = BlockBitmap_IndexGroup[BlockIndex].FaceBitmapIndex[FaceIndex];
+
+				// 渲染目标绘制位图，将位图渲染到对应的方块面上
+				m_BitmapRenderTarget->DrawBitmap(
+					m_InventoryBlockBitmaps[FaceTexture_InBitmapsArrayIndex].Get(),
+					Source_BlockItems_Rect
+				);
+			}
+
+
+			// 三个面都绘制完成，结束渲染
+			m_BitmapRenderTarget->EndDraw();
+			// 将绘制好的位图导出到对应的 D2Dbitmap，生成预渲染位图
+			m_BitmapRenderTarget->GetBitmap(&m_InventoryBlockIcons[BlockIndex]);
+		}
+	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// D2D 渲染函数之一，在 BeginDraw - EndDraw 之间，绘制 2D UI 元素
+	void D2DRenderBranch_UIElements(const UINT& WindowWidth, const UINT& WindowHeight)
+	{
+		// 绘制 HotBar 快捷物品栏
+		{
+			// 源图不要黑底，左上角从 (1, 1) 开始
+			Source_HotBarInventory_Rect.left = 1;
+			Source_HotBarInventory_Rect.top = 1;
+			Source_HotBarInventory_Rect.right = Source_HotBarInventory_Rect.left + HotBar_Width;
+			Source_HotBarInventory_Rect.bottom = Source_HotBarInventory_Rect.top + HotBar_Height;
+
+			// 目标区域相对窗口水平居中，垂直方向在窗口底部
+			Destination_HotBarInventory_Rect.left = (WindowWidth - HotBar_Width * Components_Scale_Rate) / 2;
+			Destination_HotBarInventory_Rect.top = (WindowHeight - HotBar_Height * Components_Scale_Rate);
+			Destination_HotBarInventory_Rect.right = Destination_HotBarInventory_Rect.left + HotBar_Width * Components_Scale_Rate;
+			Destination_HotBarInventory_Rect.bottom = Destination_HotBarInventory_Rect.top + HotBar_Height * Components_Scale_Rate;
+
+
+			// 绘制物品栏，对带透明通道的位图而言，这里会自动进行混合 (上面也指定预乘 alpha 了)，不用担心混合问题
+			// 选 D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR 邻近点插值采样就行
+			m_D2DDeviceContext->DrawBitmap(m_InventoryBitmap.Get(), Destination_HotBarInventory_Rect,
+				1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, Source_HotBarInventory_Rect);
+		}
+
+
+		// 绘制 Selected Slot 物品选择框
+		{
+			// 源图不要黑底，左上角从 (1, 23) 开始
+			Source_Slot_Rect.left = 1;
+			Source_Slot_Rect.top = 23;
+			Source_Slot_Rect.right = Source_Slot_Rect.left + Slot_Width;
+			Source_Slot_Rect.bottom = Source_Slot_Rect.top + Slot_Height;
+
+			// 目标区域在物品栏左上角 -1，要和边框对齐，边框的这个 1 要单独乘放缩比例，不然会对不上槽位
+			Destination_Slot_Rect.left = Destination_HotBarInventory_Rect.left - 1 * Components_Scale_Rate;
+			Destination_Slot_Rect.top = Destination_HotBarInventory_Rect.top - 1 * Components_Scale_Rate;
+			Destination_Slot_Rect.right = Destination_Slot_Rect.left + Slot_Width * Components_Scale_Rate;
+			Destination_Slot_Rect.bottom = Destination_Slot_Rect.top + Slot_Height * Components_Scale_Rate;
+
+
+			// 偏移到指定的物品栏槽位，一个槽位 20 x 20 (180 / 9 = 20)
+			Destination_Slot_Rect.left += Selected_Slot_Index * 20 * Components_Scale_Rate;
+			Destination_Slot_Rect.right += Selected_Slot_Index * 20 * Components_Scale_Rate;
+
+			// 绘制物品选择框
+			m_D2DDeviceContext->DrawBitmap(m_InventoryBitmap.Get(), Destination_Slot_Rect,
+				1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, Source_Slot_Rect);
+		}
+
+
+		// 绘制经验条
+		{
+			// 源图坐标从 (0, 64) 开始
+			Source_XPBar_Rect.left = 0;
+			Source_XPBar_Rect.top = 64;
+			Source_XPBar_Rect.right = Source_XPBar_Rect.left + XPBar_Width;
+			Source_XPBar_Rect.bottom = Source_XPBar_Rect.top + XPBar_Height;
+
+			// 目标区域在物品栏上方 7 个像素，left 和 right 直接使用物品栏的 left 和 right
+			Destination_XPBar_Rect.left = Destination_HotBarInventory_Rect.left;
+			Destination_XPBar_Rect.top = Destination_HotBarInventory_Rect.top - 7 * Components_Scale_Rate;
+			Destination_XPBar_Rect.right = Destination_HotBarInventory_Rect.right;
+			Destination_XPBar_Rect.bottom = Destination_XPBar_Rect.top + XPBar_Height * Components_Scale_Rate;
+
+			// 绘制经验条
+			m_D2DDeviceContext->DrawBitmap(m_HUDBitmap.Get(), Destination_XPBar_Rect,
+				1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, Source_XPBar_Rect);
+		}
+
+
+		// 绘制生命值 (一共 10 颗心)
+		{
+			// 先画空心槽，源图坐标从 (16, 0) 开始
+			Source_EmptyHeart_Rect.left = 16;
+			Source_EmptyHeart_Rect.top = 0;
+			Source_EmptyHeart_Rect.right = Source_EmptyHeart_Rect.left + Heart_Width;
+			Source_EmptyHeart_Rect.bottom = Source_EmptyHeart_Rect.top + Heart_Width;
+
+			// 再画实心，源图坐标从 (52, 0) 开始
+			Source_FullHeart_Rect.left = 52;
+			Source_FullHeart_Rect.top = 0;
+			Source_FullHeart_Rect.right = Source_FullHeart_Rect.left + Heart_Width;
+			Source_FullHeart_Rect.bottom = Source_FullHeart_Rect.top + Heart_Width;
+
+			// 目标区域在经验条上方 10 个像素
+			Destination_Heart_Rect.left = Destination_XPBar_Rect.left;
+			Destination_Heart_Rect.top = Destination_XPBar_Rect.top - 10 * Components_Scale_Rate;
+			Destination_Heart_Rect.right = Destination_Heart_Rect.left + Heart_Width * Components_Scale_Rate;
+			Destination_Heart_Rect.bottom = Destination_Heart_Rect.top + Heart_Height * Components_Scale_Rate;
+
+
+			// 用循环依次绘制 10 颗心
+			for (UINT i = 0; i < 10; i++)
+			{
+				// 先画空心槽
+				m_D2DDeviceContext->DrawBitmap(m_HUDBitmap.Get(), Destination_Heart_Rect,
+					1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, Source_EmptyHeart_Rect);
+
+				// 再画实心
+				m_D2DDeviceContext->DrawBitmap(m_HUDBitmap.Get(), Destination_Heart_Rect,
+					1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, Source_FullHeart_Rect);
+
+				// 偏移 left 和 right，准备画下一颗心，-1 是为了让边缘重叠，不重叠不好看
+				Destination_Heart_Rect.left += (Heart_Width - 1) * Components_Scale_Rate;
+				Destination_Heart_Rect.right += (Heart_Width - 1) * Components_Scale_Rate;
+			}
+
+		}
+
+
+		// 绘制饥饿值 (饱食度，一共 10 个鸡腿)
+		{
+			// 水平镜像翻转后，源图左上角是 (BitmapWidth - 16 - HurgerBar_Width, 36)
+			Source_HurgerBar_Rect.left = 256 - 16 - HurgerBar_Width;
+			Source_HurgerBar_Rect.top = 36;
+			Source_HurgerBar_Rect.right = Source_HurgerBar_Rect.left + HurgerBar_Width;
+			Source_HurgerBar_Rect.bottom = Source_HurgerBar_Rect.top + HurgerBar_Height;
+
+
+			// 目标区域在经验条上方 10 个像素，left 和 right 倒着画
+			Destination_HurgerBar_Rect.left = Destination_XPBar_Rect.right - HurgerBar_Width * Components_Scale_Rate;
+			Destination_HurgerBar_Rect.top = Destination_XPBar_Rect.top - 10 * Components_Scale_Rate;
+			Destination_HurgerBar_Rect.right = Destination_HurgerBar_Rect.left + HurgerBar_Width * Components_Scale_Rate;
+			Destination_HurgerBar_Rect.bottom = Destination_HurgerBar_Rect.top + HurgerBar_Height * Components_Scale_Rate;
+
+
+			// 用循环依次绘制 10 颗鸡腿
+			for (UINT i = 0; i < 10; i++)
+			{
+				// 绘制图标
+				m_D2DDeviceContext->DrawBitmap(m_FlippedHUDBitmap.Get(), Destination_HurgerBar_Rect,
+					1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, Source_HurgerBar_Rect);
+
+				// 偏移 left 和 right，准备画下一颗鸡腿，-1 是为了让边缘重叠，不重叠不好看
+				Destination_HurgerBar_Rect.left -= (HurgerBar_Width - 1) * Components_Scale_Rate;
+				Destination_HurgerBar_Rect.right -= (HurgerBar_Width - 1) * Components_Scale_Rate;
+			}
+		}
+
+
+		// 十字准心
+		{
+			// 源图坐标从 (3, 3) 开始
+			Source_CrossHair_Rect.left = 3;
+			Source_CrossHair_Rect.top = 3;
+			Source_CrossHair_Rect.right = Source_CrossHair_Rect.left + CrossHair_Width;
+			Source_CrossHair_Rect.bottom = Source_CrossHair_Rect.top + CrossHair_Height;
+
+			// 十字准心在窗口中央
+			Destination_CrossHair_Rect.left = (WindowWidth / 2.0) - (CrossHair_Width * Components_Scale_Rate) / 2.0;
+			Destination_CrossHair_Rect.top = (WindowHeight / 2.0) - (CrossHair_Height * Components_Scale_Rate) / 2.0;
+			Destination_CrossHair_Rect.right = Destination_CrossHair_Rect.left + CrossHair_Width * Components_Scale_Rate;
+			Destination_CrossHair_Rect.bottom = Destination_CrossHair_Rect.top + CrossHair_Height * Components_Scale_Rate;
+
+			// 绘制十字准心
+			m_D2DDeviceContext->DrawBitmap(m_HUDBitmap.Get(), Destination_CrossHair_Rect,
+				1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, Source_CrossHair_Rect);
+		}
+	}
+
+
+	// D2D 渲染函数之一，在 BeginDraw - EndDraw 之间，绘制物品栏上的方块物品
+	void D2DRenderBranch_InventoryItems()
+	{
+		// 源图大小 15x15
+		Source_InnerSpace_Rect.left = 0;
+		Source_InnerSpace_Rect.top = 0;
+		Source_InnerSpace_Rect.right = Source_InnerSpace_Rect.left + Slot_InnerSpace_Width;
+		Source_InnerSpace_Rect.bottom = Source_InnerSpace_Rect.top + Slot_InnerSpace_Height;
+
+		// 目标区域 (物品栏空槽) 在左上角 +3，注意这个 +3 也要与缩放系数相乘
+		Destination_InnerSpace_Rect.left = Destination_HotBarInventory_Rect.left + 3 * Components_Scale_Rate;
+		Destination_InnerSpace_Rect.top = Destination_HotBarInventory_Rect.top + 3 * Components_Scale_Rate;
+		Destination_InnerSpace_Rect.right = Destination_InnerSpace_Rect.left + Slot_InnerSpace_Width * Components_Scale_Rate;
+		Destination_InnerSpace_Rect.bottom = Destination_InnerSpace_Rect.top + Slot_InnerSpace_Height * Components_Scale_Rate;
+
+		// 逐一绘制每个方块物品立体图标
+		for (UINT i = 0; i < m_InventoryBlockIcons.size(); i++)
+		{
+			// 绘制物品立体图标
+			m_D2DDeviceContext->DrawBitmap(m_InventoryBlockIcons[i].Get(), Destination_InnerSpace_Rect,
+				1, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, Source_InnerSpace_Rect);
+
+			// 偏移到对应的空槽，一个槽位 20 x 20 (180 / 9 = 20)
+			Destination_InnerSpace_Rect.left += 20 * Components_Scale_Rate;
+			Destination_InnerSpace_Rect.right += 20 * Components_Scale_Rate;
+		}
+	}
+
+
+	// D2D UI 渲染，此操作必须在命令队列 ExecuteCommandLists 之后，交换链 Present 之前
+	void D2DUIRender(const UINT& CurrentFrameIndex, const UINT& WindowWidth, const UINT& WindowHeight)
+	{
+		// D3D11On12 设备告诉包装资源 (D3D11RenderTarget) 进入 InState (D3D12_RESOURCE_STATE_RENDER_TARGET) 渲染目标状态
+		// 此操作不会插入一个多余的 Present -> RenderTarget 的资源状态转换屏障，它只会在 D3D11On12 这个包装层进行标记和同步
+		// 所以必须要放在 ExecuteCommandLists 后面，而且前面必须携带 beg_barrier (Present -> RenderTarget) 的转换指令
+		// 它会锁定包装资源的"内部所有权"和"状态转换独占权"，让后续的 D2D 命令可以安全地在处于 RENDER_TARGET 状态的资源上进行绘制
+		m_D3D11On12Device->AcquireWrappedResources(m_D3D11WrappedRenderTarget[CurrentFrameIndex].GetAddressOf(), 1);
+
+		// 经过 D3D11On12 的状态转换后，D2D 设置渲染目标，开始 2D 渲染
+		m_D2DDeviceContext->SetTarget(m_D2DRenderTarget[CurrentFrameIndex].Get());
+
+
+		// D2D 设备上下文开始 2D 渲染！2D 渲染的指令都要在 BeginDraw - EndDraw 之间完成 (和 GDI，GDI+，EasyX，EGE 这些一样)
+		// 执行此句之后，D2DDeviceContext 会开始记录 D2D 渲染命令 (不会立即执行，只会记录命令)
+		m_D2DDeviceContext->BeginDraw();
+
+
+		// 先绘制 2D UI 元素
+		D2DRenderBranch_UIElements(WindowWidth, WindowHeight);
+
+
+		// 再绘制物品栏上的方块物品
+		D2DRenderBranch_InventoryItems();
+
+
+		// D2D 设备上下文结束 2D 渲染！D2DDeviceContext 结束对渲染命令的记录，准备提交给 GPU
+		m_D2DDeviceContext->EndDraw();
+
+
+		// D3D11On12 设备告诉包装资源 (D3D11RenderTarget) 进入 OutState (D3D12_RESOURCE_STATE_PRESENT) 呈现状态
+		// 说明 D2D 已经渲染完成了，接下来释放包装资源的"内部所有权"和"状态转换独占权"，将这些交还给 D3D12 层设备
+		// 另外这个操作还会自动插入一个 RenderTarget -> Present 的资源屏障，所以 end_barrier 我们不用了，防止状态重复转换
+		m_D3D11On12Device->ReleaseWrappedResources(m_D3D11WrappedRenderTarget[CurrentFrameIndex].GetAddressOf(), 1);
+
+		// 接下来是最关键的一个指令！D3D11 设备上下文进行刷新指令操作，将 D2D 的绘图指令全部提交到 D3D12CommandQueue
+		// (注意这里不是 D2DDeviceContext->Flush()，它的意思是立即执行所有挂起的绘图命令，但不会刷新与渲染目标关联的 D3D 设备上下文)
+		// 没有它，D2D 绘制指令不会被执行，更不会显示在屏幕 (渲染目标) 上，它相当于 D2D 的 ExecuteCommandLists
+		m_D3D11DeviceContext->Flush();
+	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+	// 获取 Selected_Slot_Index
+	inline UINT Get_Selected_Slot_Index()
+	{
+		return Selected_Slot_Index;
+	}
+
+	// 设置 Selected_Slot_Index
+	inline void Set_Selected_Slot_Index(const UINT& index)
+	{
+		Selected_Slot_Index = index;
+	}
+
+	// 获取 WIC 纹理资源的 BitsPerPixel 图像深度
+	inline UINT Get_WICTexture_BitsPerPixel(const ComPtr<IWICBitmapSource>& TextureWICResource)
+	{
+		UINT BitsPerPixel = 0;		// 图像深度
+
+		// 获取纹理的 WIC 纹理格式
+		WICPixelFormatGUID _temp_WICPixelFormat = {};
+		TextureWICResource->GetPixelFormat(&_temp_WICPixelFormat);
+
+		ComPtr<IWICComponentInfo> _temp_WICComponentInfo = {};			// 用于获取 BitsPerPixel 纹理图像深度
+		ComPtr<IWICPixelFormatInfo> _temp_WICPixelInfo = {};			// 用于获取 BitsPerPixel 纹理图像深度
+		m_WICFactory->CreateComponentInfo(_temp_WICPixelFormat, &_temp_WICComponentInfo);
+		_temp_WICComponentInfo.As(&_temp_WICPixelInfo);
+		_temp_WICPixelInfo->GetBitsPerPixel(&BitsPerPixel);				// 获取 BitsPerPixel 图像深度
+
+		return BitsPerPixel;
+	}
+};
+
+
+
+// ---------------------------------------------------------------------------------------------------------------
+
 
 
 // 摄像机类
@@ -359,7 +1391,7 @@ public:
 
 
 
-// DX12 引擎
+// DX12 引擎，主引擎，用于 3D 物体渲染
 class DX12Engine
 {
 private:
@@ -381,7 +1413,7 @@ private:
 
 	ComPtr<IDXGISwapChain3> m_DXGISwapChain;				// DXGI 交换链
 	ComPtr<ID3D12DescriptorHeap> m_RTVHeap;					// RTV 描述符堆
-	ComPtr<ID3D12Resource> m_RenderTarget[3];				// 渲染目标数组，每一副渲染目标对应一个窗口缓冲区
+	ComPtr<ID3D12Resource> m_D3D12RenderTarget[3];			// 渲染目标数组，每一副渲染目标对应一个窗口缓冲区
 	D3D12_CPU_DESCRIPTOR_HANDLE RTVHandle;					// RTV 描述符句柄
 	UINT RTVDescriptorSize = 0;								// RTV 描述符的大小
 	UINT FrameIndex = 0;									// 帧索引，表示当前渲染的第 i 帧 (第 i 个渲染目标)
@@ -390,7 +1422,6 @@ private:
 	UINT64 FenceValue = 0;									// 用于围栏等待的围栏值
 	HANDLE RenderEvent = NULL;								// GPU 渲染事件
 	D3D12_RESOURCE_BARRIER beg_barrier = {};				// 渲染开始的资源屏障，呈现 -> 渲染目标
-	D3D12_RESOURCE_BARRIER end_barrier = {};				// 渲染结束的资源屏障，渲染目标 -> 呈现
 
 	ComPtr<ID3D12DescriptorHeap> m_DSVHeap;					// DSV 描述符堆
 	D3D12_CPU_DESCRIPTOR_HANDLE DSVHandle;					// DSV 描述符句柄
@@ -410,6 +1441,7 @@ private:
 	Camera m_FirstCamera;			// 第一人称摄像机
 
 
+
 	// 视口
 	D3D12_VIEWPORT ViewPort = D3D12_VIEWPORT{ 0, 0, float(WindowWidth), float(WindowHeight), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
 	// 裁剪矩形
@@ -421,75 +1453,70 @@ private:
 
 
 
-	ComPtr<IWICImagingFactory> m_WICFactory;				// WIC 工厂
-	ComPtr<IWICBitmapDecoder> m_WICBitmapDecoder;			// 位图解码器
-	ComPtr<IWICBitmapFrameDecode> m_WICBitmapDecodeFrame;	// 由解码器得到的单个位图帧
-	ComPtr<IWICFormatConverter> m_WICFormatConverter;		// 位图转换器
+	// D2D 引擎对象，用于渲染 2D UI 界面
+	D2DEngine m_D2DEngine;
 
 
-	// 纹理结构体
-	struct Texture
+	// 纹理资源名 (路径) 组，存储需要加载的 3D 渲染纹理名称 (相对路径)
+	std::vector<std::wstring> TextureNames =
 	{
-		std::wstring TextureName;						// 纹理的名字
-		std::wstring FilePath;							// 图像文件的位置
-		ComPtr<IWICBitmapSource> WICBitmapSource;		// 每张纹理的 WIC 位图资源，用于获取位图数据
+		L"resource/diamond_ore.png",					// 0.钻石原矿
+		L"resource/cobblestone.png",					// 1.原石
+		L"resource/emerald_block.png",					// 2.绿宝石块
+		L"resource/furnace_front_off.png",				// 3.熔炉正面
+		L"resource/furnace_side.png",					// 4.熔炉侧面
+		L"resource/furnace_top.png",					// 5.熔炉顶面
+		L"resource/gold_ore.png",						// 6.金矿
+		L"resource/gold_block.png",						// 7.金块
+		L"resource/noteblock.png",						// 8.音符盒
+		L"resource/piston_bottom.png",					// 9.活塞底面
+		L"resource/piston_side.png",					// 10.活塞侧面
+		L"resource/piston_top_normal.png",				// 11.活塞顶面
+		L"resource/redstone_block.png",					// 12.红石块
+		L"resource/redstone_lamp_on.png",				// 13.红石灯激活状态
+		L"resource/tnt_bottom.png",						// 14.TNT底面
+		L"resource/tnt_side.png",						// 15.TNT侧面
+		L"resource/tnt_top.png",						// 16.TNT顶面
+		L"resource/bedrock.png",						// 17.基岩
+		L"resource/bookshelf.png",						// 18.书架
+		L"resource/command_block.png",					// 19.命令方块
+		L"resource/crafting_table_front.png",			// 20.工作台正面
+		L"resource/crafting_table_side.png",			// 21.工作台侧面
+		L"resource/crafting_table_top.png",				// 22.工作台顶面
+		L"resource/dispenser_front_horizontal.png",		// 23.水平发射器正面
+		L"resource/dispenser_front_vertical.png",		// 24.垂直发射器顶面
+		L"resource/dropper_front_horizontal.png",		// 25.水平投掷器正面
+		L"resource/dropper_front_vertical.png",			// 26.垂直投掷器顶面
+		L"resource/emerald_ore.png",					// 27.绿宝石原矿
+		L"resource/stone_diorite_smooth.png",			// 28.磨制闪长岩
+		L"resource/glowstone.png",						// 29.萤石
+		L"resource/iron_ore.png",						// 30.铁矿
+		L"resource/log_oak.png",						// 31.橡木原木侧面
+		L"resource/log_oak_top.png",					// 32.橡木原木顶面
+		L"resource/planks_oak.png",						// 33.橡木木板
+		L"resource/sand.png",							// 34.沙子
+		L"resource/stonebrick.png",						// 35.石砖
+		L"resource/stone_slab_top.png",					// 36.平滑石
+		L"resource/quartz_block_bottom.png",			// 37.石英块底面
+		L"resource/quartz_block_side.png",				// 38.石英块侧面
+		L"resource/quartz_block_top.png",				// 39.石英块顶面
 	};
 
-	// 纹理资源组，用于临时加载并存储渲染需要用到纹理资源，这些纹理资源会加入到纹理数组中
-	// 当资源全部加载到上传堆，全部 WIC 位图临时资源都会被释放，不再让它们占内存
-	std::vector<Texture> TextureGroup =
-	{
-		{L"蓝冰", L"resource/ice_packed.png"},							// 0
-		{L"圆石", L"resource/cobblestone.png"},							// 1
-		{L"绿宝石块", L"resource/emerald_block.png"},						// 2
-		{L"熔炉正面", L"resource/furnace_front_off.png"},					// 3
-		{L"熔炉侧面", L"resource/furnace_side.png"},						// 4
-		{L"熔炉顶面", L"resource/furnace_top.png"},						// 5
-		{L"金矿", L"resource/gold_ore.png"},								// 6
-		{L"金块", L"resource/gold_block.png"},							// 7
-		{L"音符盒", L"resource/noteblock.png"},							// 8
-		{L"活塞底面", L"resource/piston_bottom.png"},						// 9
-		{L"活塞侧面", L"resource/piston_side.png"},						// 10
-		{L"活塞顶面", L"resource/piston_top_normal.png"},					// 11
-		{L"红石块", L"resource/redstone_block.png"},						// 12
-		{L"红石灯激活状态", L"resource/redstone_lamp_on.png"},				// 13
-		{L"TNT底面", L"resource/tnt_bottom.png"},						// 14
-		{L"TNT侧面", L"resource/tnt_side.png"},							// 15
-		{L"TNT顶面", L"resource/tnt_top.png"},							// 16
-		{L"基岩", L"resource/bedrock.png"},								// 17
-		{L"书架", L"resource/bookshelf.png"},							// 18
-		{L"命令方块", L"resource/command_block.png"},						// 19
-		{L"工作台正面", L"resource/crafting_table_front.png"},			// 20
-		{L"工作台侧面", L"resource/crafting_table_side.png"},				// 21
-		{L"工作台顶面", L"resource/crafting_table_top.png"},				// 22
-		{L"水平发射器正面", L"resource/dispenser_front_horizontal.png"},	// 23
-		{L"垂直发射器顶面", L"resource/dispenser_front_vertical.png"},		// 24
-		{L"水平投掷器正面", L"resource/dropper_front_horizontal.png"},		// 25
-		{L"垂直投掷器顶面", L"resource/dropper_front_vertical.png"},		// 26
-		{L"绿宝石原矿", L"resource/emerald_ore.png"},						// 27
-		{L"玻璃", L"resource/glass.png"},								// 28
-		{L"萤石", L"resource/glowstone.png"},							// 29
-		{L"铁矿", L"resource/iron_ore.png"},								// 30
-		{L"橡木原木侧面", L"resource/log_oak.png"},						// 31
-		{L"橡木原木顶面", L"resource/log_oak_top.png"},					// 32
-		{L"橡木木板", L"resource/planks_oak.png"},						// 33
-		{L"沙子", L"resource/sand.png"},									// 34
-		{L"石砖", L"resource/stonebrick.png"},							// 35
-		{L"平滑石", L"resource/stone_slab_top.png"},						// 36
-		{L"石英块底面", L"resource/quartz_block_bottom.png"},				// 37
-		{L"石英块侧面", L"resource/quartz_block_side.png"},				// 38
-		{L"石英块顶面", L"resource/quartz_block_top.png"}					// 39
-	};
+
+	// 3D 渲染使用的方块 WIC 纹理资源组
+	// 当资源全部加载到上传堆，全部 WIC 位图资源 (DX12) 都会被释放，不再让它们占内存
+	std::vector<ComPtr<IWICBitmapSource>> m_TextureGroup;
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
 
 	// 纹理数组所有纹理的 DXGI 格式
 	DXGI_FORMAT TextureFormat = DXGI_FORMAT_UNKNOWN;
 
-	// Texture Array 纹理数组默认堆资源，顾名思义，可以存储多个纹理的数组，但是 GPU Texture Array，绝大部分手游端游都在用它
-	// 和我们之前理解的 Texture Group 不同，我们要创建的是 GPU 上可供使用的纹理数组，之前我们一直用的是 cpp 端的 vector, array 这些弄的
-	// 所以你就会见到画一个纹理就要 SetGraphicsRootDescriptorTable 一次，就比如一个熔炉方块要换三张纹理图片，要 Set 三次
-	// 对于有大量纹理要切换的情况，这种方法肯定不合适，开销太大了，而且接下来要讲的多实例渲染也不适合这种方法 (会占很多寄存器)
-	// 所以我们需要 GPU Texture Array 来存储这些纹理，对于纹理数组，一次 SetGraphicsRootDescriptorTable 就水到渠成了
-	// 纹理数组需要所有元素都要有相同的属性 (纹理宽度高度相等，格式，Mipmap 相等)，否则会渲染错误
+	// Texture Array 纹理数组默认堆资源
 	ComPtr<ID3D12Resource> m_TextureArrayDefaultResource;
 	// GPU Texture Array 的上传堆资源，用于中转
 	ComPtr<ID3D12Resource> m_TextureArrayUploadResource;
@@ -521,6 +1548,7 @@ private:
 	// ---------------------------------------------------------------------------------------------------------------
 
 
+
 	// 立方体面结构体，只有一个 UINT 数组成员
 	// 数组索引表示对应的立方体面索引，数组元素值表示对应立方体面的纹理在 Texture Array 的位置
 	struct CUBEFACE
@@ -536,7 +1564,7 @@ private:
 	{
 		// 一个完整方块有六个面，右面 (+X)，左面 (-X)，前面 (+Z)，后面 (-Z)，上面 (+Y)，下面 (-Y)，我们以右面是方块正面为准
 
-		{0, 0, 0, 0, 0, 0},			// 0.蓝冰
+		{0, 0, 0, 0, 0, 0},			// 0.钻石原矿
 		{1, 1, 1, 1, 1, 1},			// 1.圆石
 		{2, 2, 2, 2, 2, 2},			// 2.绿宝石块
 		{3, 4, 4, 4, 5, 5},			// 3.熔炉 (三个面)
@@ -556,7 +1584,7 @@ private:
 		{25, 9, 9, 9, 9, 9},		// 17.水平投掷器 (三个面)
 		{9, 9, 9, 9, 26, 9},		// 18.垂直投掷器 (三个面)
 		{27, 27, 27, 27, 27, 27},	// 19.绿宝石原矿
-		{28, 28, 28, 28, 28, 28},	// 20.玻璃
+		{28, 28, 28, 28, 28, 28},	// 20.磨制闪长岩
 		{29, 29, 29, 29, 29, 29},	// 21.萤石
 		{30, 30, 30, 30, 30, 30},	// 22.铁矿
 		{31, 31, 31, 31, 32, 32},	// 23.橡木原木 (两个面)
@@ -579,8 +1607,15 @@ private:
 	// ---------------------------------------------------------------------------------------------------------------
 
 
+
 	ComPtr<ID3D12RootSignature> m_RootSignature;		// 根签名
 	ComPtr<ID3D12PipelineState> m_RenderBlockPSO;		// 渲染管线状态
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
 
 	// Vertex Buffer View (VBV) 顶点缓冲描述符数组, VBV0 是逐顶点流，VBV1 是逐实例流
 	D3D12_VERTEX_BUFFER_VIEW VertexBufferView[2] = {};
@@ -670,8 +1705,9 @@ private:
 		UINT BlockType;			// 方块类型
 	};
 
-	// 方块实例组，存储每一个方块实例 (实例以及实例化的知识在 STEP20_CreatePSO 那里)
+	// 方块实例组，存储每一个方块实例
 	std::vector<BLOCKINSTANCE> BlockGroup;
+
 
 
 	// ---------------------------------------------------------------------------------------------------------------
@@ -702,6 +1738,7 @@ public:
 		ShowWindow(m_hwnd, SW_SHOW);
 	}
 
+
 	// 创建调试层
 	void STEP02_CreateDebugDevice()
 	{
@@ -718,6 +1755,7 @@ public:
 
 #endif
 	}
+
 
 	// 创建设备
 	bool STEP03_CreateDevice()
@@ -753,6 +1791,7 @@ public:
 					OutputDebugStringW(L"当前使用的显卡：");
 					OutputDebugStringW(adap.Description);
 					OutputDebugStringW(L"\n");
+
 					return true;
 				}
 			}
@@ -766,8 +1805,46 @@ public:
 		}
 	}
 
+
+	// 屏蔽 MissingClearValue 带来的调试层警告刷屏，这个 D3D12 WARNING 太阴间了...
+	// 我们没有方法让 DXGI 交换链下的 D3D12RenderTarget 设置 ClearValue
+	// D3D12 为了优化性能，鼓励开发者在创建资源时提供一个 ClearValue (深度缓冲资源就是这样做的)
+	// 这样后续的 Clear 操作可以由驱动进行加速，如果没有提供，就会触发这个警告，提示性能可能稍差
+	// 上面 D2DEngine 创建的位图渲染目标，它内部使用的纹理也会映射到 D3D11On12 包装的资源
+	// 这些包装的资源没有设置 ClearValue，也会触发 D3D12 调试层警告 (巨硬的神秘代码发力了)
+	// D2DEngine 的位图渲染目标/设备上下文一旦 Clear 或者 SetTransform 就会触发这些警告，相当烦人...
+	void STEP04_IgnoreClearValueWarning()
+	{
+#if defined(_DEBUG)
+
+		// 临时调试层消息队列，用于获取并屏蔽 D3D12 WARNING
+		ComPtr<ID3D12InfoQueue> _temp_DebugInfoQueue;
+
+		// 将 D3D12 设备的数据继承到新的消息队列接口，创建调试层消息队列
+		m_D3D12Device.As(&_temp_DebugInfoQueue);
+		
+		// 定义要抑制的警告 ID
+		D3D12_MESSAGE_ID hideMessages[1] = 
+		{
+			// 没设置 ClearValue 的警告 ID
+			D3D12_MESSAGE_ID_CLEARRENDERTARGETVIEW_MISMATCHINGCLEARVALUE,
+		};
+		
+		// 调试层消息过滤结构体
+		D3D12_INFO_QUEUE_FILTER filter = {};
+		filter.DenyList.NumIDs = 1;					// 要屏蔽的消息 ID 数
+		filter.DenyList.pIDList = hideMessages;		// 指向消息数据的指针
+
+		// 向消息过滤器添加要屏蔽的 Warning/Error，这样就不用见到 Warning 在下面的调试窗口刷屏了
+		// 慎用消息过滤，除非迫不得已 (就像现在这样)，否则不要使用，会错过很多一击致命的问题根源
+		_temp_DebugInfoQueue->AddStorageFilterEntries(&filter);
+
+#endif
+	}
+
+
 	// 创建命令三件套
-	void STEP04_CreateCommandComponents()
+	void STEP05_CreateCommandComponents()
 	{
 		// 队列信息结构体，这里只需要填队列的类型 type 就行了
 		D3D12_COMMAND_QUEUE_DESC queueDesc = {};
@@ -787,8 +1864,9 @@ public:
 		m_CommandList->Close();
 	}
 
+
 	// 创建渲染目标，将渲染目标设置为窗口
-	void STEP05_CreateRenderTarget()
+	void STEP06_CreateRenderTarget()
 	{
 		// 创建 RTV 描述符堆 (Render Target View，渲染目标描述符)
 		D3D12_DESCRIPTOR_HEAP_DESC RTVHeapDesc = {};
@@ -831,20 +1909,22 @@ public:
 		for (UINT i = 0; i < 3; i++)
 		{
 			// 从交换链中获取第 i 个窗口缓冲，创建第 i 个 RenderTarget 渲染目标
-			m_DXGISwapChain->GetBuffer(i, IID_PPV_ARGS(&m_RenderTarget[i]));
+			m_DXGISwapChain->GetBuffer(i, IID_PPV_ARGS(&m_D3D12RenderTarget[i]));
 
 			// 创建 RTV 描述符，将渲染目标绑定到描述符上
-			m_D3D12Device->CreateRenderTargetView(m_RenderTarget[i].Get(), nullptr, RTVHandle);
+			m_D3D12Device->CreateRenderTargetView(m_D3D12RenderTarget[i].Get(), nullptr, RTVHandle);
 
 			// 偏移到下一个 RTV 句柄
 			RTVHandle.ptr += RTVDescriptorSize;
 		}
 	}
 
+
 	// 创建围栏和资源屏障，用于 CPU-GPU 的同步
-	void STEP06_CreateFenceAndBarrier()
+	void STEP07_CreateFenceAndBarrier()
 	{
-		// 创建 CPU 上的等待事件，注意第二个参数填 false 表示自动重置，第三个初始状态参数填 false 表示无信号状态，防止资源竞争
+		// 创建 CPU 上的等待事件，注意第二个参数填 false 表示自动重置事件 (每当经过一次 Wait 函数，自动重置无信号状态)
+		// 第三个初始状态参数填 false 表示无信号状态，后面有 copy 动作，防止资源冲突
 		RenderEvent = CreateEvent(nullptr, false, false, nullptr);
 
 		// 创建围栏，设定初始值为 0
@@ -856,15 +1936,11 @@ public:
 		beg_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;					// 指定类型为转换屏障		
 		beg_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
 		beg_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-
-		// end_barrier 终止屏障：Render Target 渲染目标状态 -> Present 呈现状态
-		end_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		end_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-		end_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
 	}
 
+
 	// 创建 DSV 深度模板描述符堆 (Non-Shader Visible)
-	void STEP07_CreateDSVHeap()
+	void STEP08_CreateDSVHeap()
 	{
 		D3D12_DESCRIPTOR_HEAP_DESC DSVHeapDesc = {};		// DSV 描述符堆结构体
 		DSVHeapDesc.NumDescriptors = 1;						// 描述符只有 1 个，因为我们只有一个渲染目标
@@ -877,8 +1953,9 @@ public:
 		DSVHandle = m_DSVHeap->GetCPUDescriptorHandleForHeapStart();
 	}
 
+
 	// 创建深度与模板缓冲，用于开启深度测试，渲染物体正确的深度与遮挡关系
-	void STEP08_CreateDepthStencilBuffer()
+	void STEP09_CreateDepthStencilBuffer()
 	{
 		D3D12_RESOURCE_DESC DSVResourceDesc = {};							// 深度模板缓冲资源信息结构体
 		DSVResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;		// 深度缓冲其实也是一块纹理
@@ -905,8 +1982,9 @@ public:
 			D3D12_RESOURCE_STATE_DEPTH_WRITE, &DepthStencilBufferClearValue, IID_PPV_ARGS(&m_DepthStencilBuffer));
 	}
 
+
 	// 创建 DSV 描述符，DSV 描述符用于描述深度模板缓冲区，这个描述符才是渲染管线要设置的对象
-	void STEP09_CreateDSV()
+	void STEP10_CreateDSV()
 	{
 		D3D12_DEPTH_STENCIL_VIEW_DESC DSVViewDesc = {};
 		DSVViewDesc.Format = DSVFormat;								// DSV 描述符格式要和资源一致
@@ -926,7 +2004,7 @@ public:
 
 
 	// 创建用于摄像机的 Constant Buffer Resource 常量缓冲资源
-	void STEP10_CreateCameraCBVResource()
+	void STEP11_CreateCameraCBVResource()
 	{
 		// 常量资源宽度，这里填整个结构体的大小。注意！硬件要求，常量缓冲需要 256 字节对齐！所以这里要进行 Ceil 向上取整，进行内存对齐！
 		// D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT = 256
@@ -951,7 +2029,6 @@ public:
 
 		// 常量缓冲直接 Map 映射到结构体指针就行即可
 		m_CBVResource->Map(0, nullptr, reinterpret_cast<void**>(&MVPBuffer));
-
 	}
 
 
@@ -960,97 +2037,50 @@ public:
 
 
 
-	// 将所需要的所有图片文件全部加载到内存中
-	bool STEP11_LoadTextureGroup()
+	// 初始化 D2D 引擎，创建 D3D11On12 相关的设备并进行初始化，执行 D2D 引擎内部的三个必要的成员函数
+	void STEP12_InitializeD2DEngine()
 	{
-		// 创建 WIC 工厂
-		CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_WICFactory));
-
-		
-		// 循环将图片文件载入到 TextureGroup 的 WIC 位图中
-		for (UINT i = 0; i < TextureGroup.size(); i++)
-		{
-			// 先创建图片解码器，并将图片文件加载到内存
-			HRESULT hr = m_WICFactory->CreateDecoderFromFilename(TextureGroup[i].FilePath.c_str(), nullptr, GENERIC_READ,
-				WICDecodeMetadataCacheOnDemand, &m_WICBitmapDecoder);
-
-			// 用于格式化字符串
-			std::wostringstream output_str;
-			// 如果创建失败，就检查 HRESULT 返回值并提示信息
-			switch (hr)
-			{
-				case S_OK: break;	// 解码成功，直接 break 进入下一步即可
-
-				case HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND):	// 文件找不到
-					output_str << L"找不到文件 " << TextureGroup[i].FilePath << L" ！请检查文件路径是否有误！";
-					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
-					return false;
-
-				case HRESULT_FROM_WIN32(ERROR_FILE_CORRUPT):	// 文件句柄正在被另一个应用进程占用
-					output_str << L"文件 " << TextureGroup[i].FilePath << L" 已经被另一个应用进程打开并占用了！请先关闭那个应用进程！";
-					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
-					return false;
-
-				case WINCODEC_ERR_COMPONENTNOTFOUND:			// 找不到可解码的组件，说明这不是有效的图像文件
-					output_str << L"文件 " << TextureGroup[i].FilePath << L" 不是有效的图像文件，无法解码！请检查文件是否为图像文件！";
-					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
-					return false;
-
-				default:			// 发生其他未知错误
-					output_str << L"文件 " << TextureGroup[i].FilePath << L" 解码失败！发生了其他错误，错误码：" << hr << L" ，请查阅微软官方文档。";
-					MessageBox(NULL, output_str.str().c_str(), L"错误", MB_OK | MB_ICONERROR);
-					return false;
-			}
-
-			// 从解码器中获取一帧图片
-			m_WICBitmapDecoder->GetFrame(0, &m_WICBitmapDecodeFrame);
-
-
-			// 获取图片格式，并将它转化为 DX12 能接受的纹理格式
-			WICPixelFormatGUID SourceFormat = {};				// 源图格式
-			GUID TargetFormat = {};								// 目标格式
-
-			m_WICBitmapDecodeFrame->GetPixelFormat(&SourceFormat);						// 获取源图格式
-
-			// 获取目标格式，如果没有可支持的目标格式，就返回 false 并提示信息
-			if (DX12TextureHelper::GetTargetPixelFormat(&SourceFormat, &TargetFormat) == false)	
-			{
-				::MessageBox(NULL, L"此纹理不受支持!", L"提示", MB_OK);
-				return false;
-			}
-
-
-			// 获取目标格式后，将纹理转换为目标格式，使其能被 DX12 使用
-			m_WICFactory->CreateFormatConverter(&m_WICFormatConverter);
-			// 初始化转换器，实际上是把位图进行了转换
-			m_WICFormatConverter->Initialize(m_WICBitmapDecodeFrame.Get(), TargetFormat, WICBitmapDitherTypeNone,
-				nullptr, 0.0f, WICBitmapPaletteTypeCustom);
-			// 将位图数据继承到 WIC 位图资源，我们等会要在 WIC 位图资源上获取信息
-			m_WICFormatConverter.As(&TextureGroup[i].WICBitmapSource);
-		}
-
-		// 全部位图都加载成功了，就返回 true
-		return true;
+		m_D2DEngine.D2D_STEP01_CreateD3D11Device(m_D3D12Device, m_CommandQueue);
+		m_D2DEngine.D2D_STEP02_CreateD2DDevice();
+		m_D2DEngine.D2D_STEP03_CreateD2DRenderTarget(m_hwnd, m_D3D12RenderTarget);
 	}
 
 
-	// 获取纹理数组的各种属性，以第一个元素为准，后面的元素这些属性基本上是一样的 (?)
-	void STEP12_GetTextureArrayElementsProperties()
+	// 在初始化 D2D 引擎的基础上，从外部文件加载位图
+	// 部分用于 UI 并转换到 D2D 位图，部分用于方块纹理并转换到 DX12 可用的 WIC 位图
+	void STEP13_LoadImageAndTransform()
+	{
+		m_D2DEngine.D2D_STEP04_LoadUIAtlasIntoD2DBitmaps();
+		m_D2DEngine.D2D_STEP05_LoadTextureIntoWICBitmaps(TextureNames, m_TextureGroup);
+	}
+
+
+	// D2D 引擎创建物品栏方块的预渲染图，准备物品栏方块物品的渲染
+	void STEP14_LoadAndGenerateBlockIcons()
+	{
+		m_D2DEngine.D2D_STEP06_CalcIsometricMatrixAndTransform();
+		m_D2DEngine.D2D_STEP07_GenerateBlockItemIcons();
+	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 获取纹理数组的各种属性，以第一个元素为准，后面的元素这些属性是一样的 (作者检查过了)
+	void STEP15_GetTextureArrayElementsProperties()
 	{
 		// 获取第一个纹理的 DXGI 格式
 		WICPixelFormatGUID WICPixelFormat = {};
-		TextureGroup[0].WICBitmapSource->GetPixelFormat(&WICPixelFormat);
+		m_TextureGroup[0]->GetPixelFormat(&WICPixelFormat);
 		TextureFormat = DX12TextureHelper::GetDXGIFormatFromPixelFormat(&WICPixelFormat);
 
-		// 获取图像深度
-		ComPtr<IWICComponentInfo> _temp_WICComponentInfo = {};			// 用于获取 BitsPerPixel 纹理图像深度
-		ComPtr<IWICPixelFormatInfo> _temp_WICPixelInfo = {};			// 用于获取 BitsPerPixel 纹理图像深度
-		m_WICFactory->CreateComponentInfo(WICPixelFormat, &_temp_WICComponentInfo);
-		_temp_WICComponentInfo.As(&_temp_WICPixelInfo);
-		_temp_WICPixelInfo->GetBitsPerPixel(&BitsPerPixel);				// 获取 BitsPerPixel 图像深度
+		// 获取第一个纹理的图像深度
+		BitsPerPixel = m_D2DEngine.Get_WICTexture_BitsPerPixel(m_TextureGroup[0]);
 
 		// 获取纹理宽高
-		TextureGroup[0].WICBitmapSource->GetSize(&TextureWidth, &TextureHeight);
+		m_TextureGroup[0]->GetSize(&TextureWidth, &TextureHeight);
 
 
 		// 获取纹理每行所占的真实字节数，1 Byte = 8 Bits
@@ -1065,22 +2095,18 @@ public:
 		UploadSubResourceSize = UploadResourceRowSize * (TextureHeight - 1) + BytePerRowSize;
 
 
-		// 你以为算出 UploadSubResourceSize * TextureGroup.size() 就可以了吗？大错特错！
-		// 实际上，DX12 API 还有一个硬性要求：Texture Array 在上传堆每个元素必须 512 对齐，这样才能方便硬件正确寻址并复制每个纹理元素
-		// Texture Array 占上传堆的空间大小，比多个单独的纹理资源占上传堆还要大一点，不过这样保证了纹理资源的连续性
-		// 硬件复制资源的速度实际上更快了，这就是 GPU Texture Array "纹理数组" 名字的由来
 		// 我们要在算出 UploadSubResourceSize 的基础上，再进行一次 512 对齐，算出纹理数组每个元素在上传堆所占的真实大小
-		// 为每个纹理元素做一个 "安全的小屋"，在上传堆 "互不打扰"，硬件正确偏移到每个元素的起始点。仍然是最后一个元素无需对齐，直接复制
+		// 硬件正确偏移到每个元素的起始点。仍然是最后一个元素无需对齐，直接复制
 		// D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT = 512
 		UploadArrayElementSize = Ceil(UploadSubResourceSize, 512) * 512;
-		
+
 		// 最后计算上传堆资源所需要的总大小，公式和上面的 UploadSubResourceSize 计算是一样的
-		UploadResourceSize = UploadArrayElementSize * (TextureGroup.size() - 1) + UploadSubResourceSize;
+		UploadResourceSize = UploadArrayElementSize * (m_TextureGroup.size() - 1) + UploadSubResourceSize;
 	}
 
 
 	// 创建纹理数组需要的上传堆资源与默认堆资源
-	void STEP13_CreateTextureArrayResource()
+	void STEP16_CreateTextureArrayResource()
 	{
 		// 用于中转纹理的上传堆资源结构体
 		D3D12_RESOURCE_DESC UploadResourceDesc = {};
@@ -1103,15 +2129,11 @@ public:
 		D3D12_RESOURCE_DESC DefaultResourceDesc = {};
 		DefaultResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;	// 资源类型选 Texture 2D (下文的描述符会描述它是一个纹理数组)
 		DefaultResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;			// 纹理资源的布局都是 UNKNOWN
-		DefaultResourceDesc.DepthOrArraySize = TextureGroup.size();			// 资源深度 = 纹理数组长度
-
-		// 创建纹理数组，我们以 TextureGroup 中第一个纹理的宽高、格式和 Mipmap 为准，看渲染结果，尝试用"妙妙工具"分析，想想为什么会这样? 应该如何优化?
-
+		DefaultResourceDesc.DepthOrArraySize = m_TextureGroup.size();		// 资源深度 = 纹理数组长度
 		DefaultResourceDesc.Width = TextureWidth;							// 资源宽度，这里填单个纹理的宽度 (单位：像素)
 		DefaultResourceDesc.Height = TextureHeight;							// 资源高度，这里填单个纹理的高度 (单位：像素)
 		DefaultResourceDesc.Format = TextureFormat;							// 资源格式，这里填纹理格式，要和纹理数组一样
 		DefaultResourceDesc.MipLevels = 1;									// Mipmap 等级，我们暂时不使用 Mipmap (只有一层 Mipmap)，所以填 1
-
 		DefaultResourceDesc.SampleDesc.Count = 1;							// 资源采样次数，这里我们填 1 就行
 
 
@@ -1122,7 +2144,7 @@ public:
 
 
 	// 将纹理数组资源逐步复制到默认堆资源中
-	void STEP14_CopyTextureArrayToDefaultResource()
+	void STEP17_CopyTextureArrayToDefaultResource()
 	{
 		// 用于暂时存储纹理数据的指针，这里要用 malloc 分配空间
 		BYTE* TextureData = (BYTE*)malloc(TextureSize);
@@ -1135,10 +2157,10 @@ public:
 
 
 		// 循环复制 TextureGroup 每个 WIC 资源到上传堆，然后逐一释放，i 是纹理数组元素索引
-		for (UINT i = 0; i < TextureGroup.size(); i++)
+		for (UINT i = 0; i < m_TextureGroup.size(); i++)
 		{
 			// 对于每个纹理元素，将整块纹理数据读到 TextureData 中，方便下面的 memcpy 复制操作
-			TextureGroup[i].WICBitmapSource->CopyPixels(nullptr, BytePerRowSize, TextureSize, TextureData);
+			m_TextureGroup[i]->CopyPixels(nullptr, BytePerRowSize, TextureSize, TextureData);
 
 			// 向上传堆资源逐行复制纹理数据 (CPU 高速缓存 -> 共享内存)，j 是复制的行数
 			for (UINT j = 0; j < TextureHeight; j++)
@@ -1156,7 +2178,7 @@ public:
 
 			// 上传堆资源指针回到本数组元素的起点
 			TransferPointer -= UploadResourceRowSize * TextureHeight;
-			
+
 			// 上传堆资源指针偏移到下一个数组元素的位置
 			// 请大家认真想一想下面的等式成立吗？ (反正作者被下面的大小偏移坑爆了，渲染不出来盯了三小时 + 一遍遍问 deepseek 才改出来)
 			// UploadResourceRowSize * TextureHeight == UploadSubResourceSize == UploadArrayElementSize
@@ -1164,7 +2186,7 @@ public:
 
 
 			// 每个元素复制完，重置并释放 WIC 位图资源，防止它占内存
-			TextureGroup[i].WICBitmapSource.Reset();
+			m_TextureGroup[i].Reset();
 		}
 
 		// Unmap 结束映射，让上传堆处于只读状态
@@ -1177,13 +2199,13 @@ public:
 
 		// 资源脚本，用来描述要复制的资源。如果复制目标是纹理数组，每个子资源 (纹理数组元素) 各复制一次，各需要一个资源脚本
 		// 如果复制纹理数组只用一个脚本，下文 GPU 执行 CopyTextureRegion 会寻址出界，报 Stack Corrupted，调试层不会提示这个信息
-		std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> PlacedFootprints(TextureGroup.size());
+		std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> PlacedFootprints(m_TextureGroup.size());
 
 		D3D12_RESOURCE_DESC DefaultResourceDesc = m_TextureArrayDefaultResource->GetDesc();	// 默认堆资源结构体
 
 		// 获取纹理复制脚本，用于下文的纹理复制，注意第三个参数！第三个参数是目标资源的子资源数量！我们复制的是纹理数组，要填数组长度！
 		// 当你填了 DefaultResourceDesc 和 TextureGroup.size()，这个函数会自动填充每个资源脚本的各种参数
-		m_D3D12Device->GetCopyableFootprints(&DefaultResourceDesc, 0, TextureGroup.size(), 0,
+		m_D3D12Device->GetCopyableFootprints(&DefaultResourceDesc, 0, m_TextureGroup.size(), 0,
 			&PlacedFootprints[0], nullptr, nullptr, nullptr);
 
 
@@ -1191,10 +2213,10 @@ public:
 		m_CommandAllocator->Reset();								// 先重置命令分配器
 		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);	// 再重置命令列表，复制命令不需要 PSO 状态，所以第二个参数填 nullptr
 
-		
+
 		// 注意！复制纹理数组到默认堆，每个子资源 (纹理数组元素) 都要调用一次 CopyTextureRegion 指令
 		// DstLocation.SubresourceIndex 和 SrcLocation.PlacedFootprint 的参数也要跟着变！这样才能正确复制
-		for (UINT i = 0; i < TextureGroup.size(); i++)
+		for (UINT i = 0; i < m_TextureGroup.size(); i++)
 		{
 			D3D12_TEXTURE_COPY_LOCATION DstLocation = {};						// 复制目标位置 (默认堆资源) 结构体
 			DstLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;		// 纹理复制类型，这里必须指向纹理
@@ -1209,7 +2231,7 @@ public:
 			// 记录复制第 i 个子资源 (纹理数组元素) 到默认堆的命令 (共享内存 -> 显存) 
 			m_CommandList->CopyTextureRegion(&DstLocation, 0, 0, 0, &SrcLocation, nullptr);
 		}
-		
+
 
 
 		// 关闭命令列表
@@ -1244,7 +2266,7 @@ public:
 
 
 	// 创建 Shader Resource View/Descriptor Heap 着色器资源描述符堆
-	void STEP15_CreateSRVHeap()
+	void STEP18_CreateSRVHeap()
 	{
 		D3D12_DESCRIPTOR_HEAP_DESC SRVHeapDesc = {};					// SRV 描述符堆信息结构体
 		SRVHeapDesc.NumDescriptors = 1;									// 只有一个 TEXTURE2DARRAY SRV
@@ -1257,7 +2279,7 @@ public:
 
 
 	// 用上文创建的 m_TextureArrayDefaultResource 创建 SRV 描述符，注意我们这里只创建一个 TEXTURE2DARRAY SRV
-	void STEP16_CreateTextureArraySRV()
+	void STEP19_CreateTextureArraySRV()
 	{
 		// Texture Array 的 SRV 信息结构体，我们要通过 SRV 告知 GPU 这个资源的类型与用法
 		D3D12_SHADER_RESOURCE_VIEW_DESC SRVTextureArrayDesc = {};
@@ -1270,7 +2292,7 @@ public:
 		// 纹理数组的起始索引，在 2D 纹理数组中，Slice 切片表示一个数组元素 (一个 2D 纹理)
 		SRVTextureArrayDesc.Texture2DArray.FirstArraySlice = 0;
 		// 纹理数组的长度 (纹理的数量)
-		SRVTextureArrayDesc.Texture2DArray.ArraySize = TextureGroup.size();
+		SRVTextureArrayDesc.Texture2DArray.ArraySize = m_TextureGroup.size();
 		// 只有一层 Mipmap，填 1
 		SRVTextureArrayDesc.Texture2DArray.MipLevels = 1;
 
@@ -1289,14 +2311,9 @@ public:
 
 
 
-	// 创建 SRV Structured Buffer (结构化缓冲区)，结构化缓冲区是一块缓冲，它和常量缓冲功能很相似，都能向着色器传递结构化数组
-	// 但不同的是常量缓冲专为"小数据、高频率、高度统一访问"而优化，结构化缓冲区是为"海量数据、随机访问、GPU 读写"而设计
-	// 每个常量缓冲有大小限制，最大 64KB；结构化缓冲区没有大小限制
-	// 常量缓冲在 GPU 端有 16 字节对齐规则 (HLSL 打包规则)，在 CPU 端有 256 字节内存对齐规则；结构化缓冲区无对齐规则
-	// 常量缓冲区需要绑定 CBV (通常是上传堆)；而结构化缓冲可以绑定 SRV 或 UAV (必须是默认堆)
-	// 常量缓冲区常用于访问小规模高频变动资源 (如 MVP 矩阵，骨骼矩阵，光照常量数据)；而结构化缓冲区用于访问大规模静态或低频变动资源
-	// 我们这里要传递立方体面纹理索引数据 (静态资源)，所以用 SRV Structured Buffer (用常量缓冲做这个也可以，想想应该怎么改? 改了有什么不同?)
-	void STEP17_CreateStructuredBufferResource()
+	// 创建 SRV Structured Buffer (结构化缓冲区)
+	// 我们这里要传递立方体面纹理索引数据 (静态资源)，所以用 SRV Structured Buffer
+	void STEP20_CreateStructuredBufferResource()
 	{
 		// Structured Buffer 中转资源的上传堆信息结构体，填法和顶点/索引缓冲一样
 		D3D12_RESOURCE_DESC StructuredBufferUploadDesc = {};
@@ -1331,10 +2348,10 @@ public:
 	}
 
 
-	
+
 	// 将 SRV Structured Buffer Resource 逐步复制到默认堆资源中，注意 SRV Structured Buffer 不需要 SRVHeap
-	// 和 CBVResource 一样，直接使用 SRV RootDescriptor (还记得 SRV 描述符使用的注意事项吗?)
-	void STEP18_CopyStructuredBufferToDefaultResource()
+	// 和 CBVResource 一样，直接使用 SRV RootDescriptor
+	void STEP21_CopyStructuredBufferToDefaultResource()
 	{
 		// 用于传递资源的指针
 		BYTE* TransferPointer = nullptr;
@@ -1389,7 +2406,7 @@ public:
 
 
 	// 创建根签名，根签名声明了着色器 (渲染管线) 所需要的资源
-	void STEP19_CreateRootSignature()
+	void STEP22_CreateRootSignature()
 	{
 		// 根参数 + 静态采样器列表
 		// Para 0: (Type = Root Descriptor,  2 DWORD)  (b0, space0) CBV 根描述符，用于 MVP 缓冲
@@ -1484,7 +2501,7 @@ public:
 
 
 	// 创建 PSO 渲染管线状态对象
-	void STEP20_CreatePSO()
+	void STEP23_CreatePSO()
 	{
 		// PSO 信息结构体
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc = {};
@@ -1527,40 +2544,6 @@ public:
 
 
 		// Input Slot 1: Instance Stream 实例流，逐实例输入
-
-		// Instance 实例，是指同一份几何数据 (如一个方块的顶点和索引) 的多个独立副本
-		// 你可以把实例理解成 "同一个模具生产出的多个产品" (类似 C++ 的类与对象，类是模具，对象是产品)
-		// 模具: 就是一个 3D 模型 (顶点、索引、纹理 UV 等固定数据)
-		// 产品: 就是每个实例，它们共享相同的"模具"，但可以有不同的位置、颜色、纹理索引、大小等属性
-
-		// Draw Call 绘制调用对渲染效率影响很大，越少的 Draw Call 画出越多的东西，渲染效率越高
-		// Draw Call 会带来 CPU 和 GPU 的双重开销，包括 CPU 端的固定成本和 GPU 端的流水线停顿
-		// 为了提高渲染效率，于是就诞生了 Instance 实例化技术
-
-		// 早期的优化技术叫 Batch Draw 批绘制，它是一种 Software Approximate Instancing 软件伪实例化技术
-		// 它的原理是将多个实例的数据，全部复制到大的顶点和索引缓冲区中，让它们合并成一个包含多实例的"超大网格"
-		// Draw Call 只需要绘制这个超大网格就行。实现简单，但 CPU 开销极大，内存占用高，GPU 性能损失严重 (没用上 GPU 并行计算的特性)，拓展性很差
-
-		// GPU Instancing 硬件实例化是一种高效的渲染技术，允许你只用一次绘制调用就可以渲染多个相同的物体，全程硬件 (GPU) 报销
-		// 但每个物体可以拥有不同的变换 (模型矩阵)、颜色、纹理索引甚至纹理 UV 等属性
-		// 硬件实例化可以专门设置一份副本几何数据 + 很多份不同的实例数据 (硬件支持，下文也会用到)，将"重复绘制"这个任务直接交给 GPU 的固定功能单元
-		// 每次绘制一个实例，GPU 都会复制一份副本，然后在 shader 上混合副本和实例的部分数据，这样就得到了完整的新实例数据，神奇吗？
-		// 硬件实例化开销低，内存占用小，易于拓展，可以完全利用 GPU 的并行特性 (可以同时好几个 GPU 线程做实例数据混合)，软件实例化的优点它都有
-		// 所以后来图形硬件升级，支持硬件实例化后，软件实例化在实际开发中就直接被踢下来了，目前只有一些旧 API 还在使用
-		
-		// 我们接下来要渲染大量位置和纹理贴图不同的方块 (1125 个)，1125 次绘制调用 GPU 开销会非常大
-		// 我们注意到方块顶点和索引的数据都是一样的，只是坐标和纹理索引不同，所以我们可以尝试利用 纹理数组 + 结构化缓冲 + 硬件实例化 渲染这么多方块
-		// 下面有两个十分重要的成员:
-		// InputSlotClass 输入流类型，要填 D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA，这样才能开启硬件实例化
-		// InstanceDataStepRate 实例数据步进率，它的意思是"每渲染多少个实例后，从实例数据缓冲区中前进到下一个元素"
-		// InstanceDataStepRate = 0 时，必须是 D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA
-		// InstanceDataStepRate = 1 时，每个实例数据只会传一次，一个实例数据对应一个实例，而且画完当前实例就画下一个实例，我们选这个
-		// InstanceDataStepRate > 1 时，是未定义行为 (DX12 把 DX11 的"灵活步进"砍掉了，原因是简化硬件逻辑，减少驱动开销)
-		
-		// 注意！同一个输入槽下的 InputSlotClass 和 InstanceDataStepRate 必须相同！！
-		// 否则调试层报错：All elements from a given input slot must have the same InputSlotClass and InstanceDataStepRate.
-		// 所以 顶点流 和 实例流 分成两个独立的输入槽，要用两个不同的 VertexBufferView，不仅是我的想法，而且是 DX12 API 强制要求我们这样分门别类
-
 
 		// 方块实例相对世界空间的偏移 float3 BlockOffset
 		InputElementDesc[3].SemanticName = "BLOCKOFFSET";									// 要锚定的语义
@@ -1648,7 +2631,7 @@ public:
 		// 最终要混合的色彩 alpha 是 ResultA
 		PSODesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
 
-		
+
 
 		// 设置基本图元，这里我们设置三角形面
 		PSODesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
@@ -1668,9 +2651,14 @@ public:
 	}
 
 
-	
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
 	// 创建顶点流的顶点缓冲和索引缓冲，用的是 VBV0 和 IBV
-	void STEP21_CreatePerVertexAndIndexBuffer()
+	void STEP24_CreatePerVertexAndIndexBuffer()
 	{
 		// 上传堆顶点资源结构体
 		D3D12_RESOURCE_DESC VertexResourceDesc = {};
@@ -1729,7 +2717,7 @@ public:
 
 
 	// 创建实例流缓冲，用的是 VBV1
-	void STEP22_CreatePerInstanceBuffer()
+	void STEP25_CreatePerInstanceBuffer()
 	{
 		// 设置随机种子
 		srand(time(0));
@@ -1757,10 +2745,10 @@ public:
 				}
 			}
 		}
-		
+
 		// 总共生成 5 x 9 x 25 = 1125 个方块实例
 
-		
+
 
 		// 上传堆实例资源结构体
 		D3D12_RESOURCE_DESC InstanceResourceDesc = {};
@@ -1785,7 +2773,7 @@ public:
 		memcpy(TransferPointer, &BlockGroup[0], BlockGroup.size() * sizeof(BLOCKINSTANCE));
 		m_BlockInstanceResource->Unmap(0, nullptr);
 
-		
+
 		// 填写 VBV1 结构体
 		VertexBufferView[1].BufferLocation = m_BlockInstanceResource->GetGPUVirtualAddress();
 		VertexBufferView[1].StrideInBytes = sizeof(BLOCKINSTANCE);
@@ -1795,6 +2783,7 @@ public:
 
 
 	// ---------------------------------------------------------------------------------------------------------------
+
 
 
 	// 更新常量缓冲区，将每帧新的 MVP 矩阵传递到常量缓冲区中，这样就能看到动态的 3D 画面了
@@ -1808,8 +2797,9 @@ public:
 	// 渲染
 	void Render()
 	{
-		// 每帧渲染开始前，调用 UpdateConstantBuffer() 更新常量缓冲区
+		// 先更新常量缓冲区，否则方块会渲染到不可见位置
 		UpdateConstantBuffer();
+
 
 		// 获取 RTV 堆首句柄
 		RTVHandle = m_RTVHeap->GetCPUDescriptorHandleForHeapStart();
@@ -1819,107 +2809,107 @@ public:
 		RTVHandle.ptr += FrameIndex * RTVDescriptorSize;
 
 
-		// 先重置命令分配器
-		m_CommandAllocator->Reset();
-		// 再重置命令列表，Close 关闭状态 -> Record 录制状态
-		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);
+		// 记录 3D 渲染命令，并提交给 CommandQueue
+		{
+			// 先重置命令分配器
+			m_CommandAllocator->Reset();
+			// 再重置命令列表，Close 关闭状态 -> Record 录制状态
+			m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);
 
-		// 将起始转换屏障的资源指定为当前渲染目标
-		beg_barrier.Transition.pResource = m_RenderTarget[FrameIndex].Get();
-		// 调用资源屏障，将渲染目标由 Present 呈现(只读) 转换到 RenderTarget 渲染目标(只写)
-		m_CommandList->ResourceBarrier(1, &beg_barrier);
+			// 设置视口 (光栅化阶段)，用于光栅化里的屏幕映射
+			m_CommandList->RSSetViewports(1, &ViewPort);
+			// 设置裁剪矩形 (光栅化阶段)
+			m_CommandList->RSSetScissorRects(1, &ScissorRect);
 
-		// 设置视口 (光栅化阶段)，用于光栅化里的屏幕映射
-		m_CommandList->RSSetViewports(1, &ViewPort);
-		// 设置裁剪矩形 (光栅化阶段)
-		m_CommandList->RSSetScissorRects(1, &ScissorRect);
-
-
-
-		// 用 RTV 句柄设置渲染目标，同时用 DSV 句柄设置深度模板缓冲，开启深度测试
-		m_CommandList->OMSetRenderTargets(1, &RTVHandle, false, &DSVHandle);
-
-		// 清空后台的深度模板缓冲，将深度重置为初始值 1，记住上文创建深度缓冲资源的时候，要填 ClearValue
-		// 否则会报 D3D12 WARNING: The application did not pass any clear value to resource creation.
-		m_CommandList->ClearDepthStencilView(DSVHandle, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
-
-		// 清空当前渲染目标的背景为天蓝色
-		m_CommandList->ClearRenderTargetView(RTVHandle, DirectX::Colors::SkyBlue, 0, nullptr);
-		
-
-
-		// 第二次设置根签名，本次检测 PSO 根签名的合法性 (引用资源是否匹配)，检测成功会开启显存与寄存器的映射通道
-		m_CommandList->SetGraphicsRootSignature(m_RootSignature.Get());
-
-		// 设置 PSO 渲染管线状态
-		m_CommandList->SetPipelineState(m_RenderBlockPSO.Get());
-
-		// 设置第一个根参数：CBV 描述符 (MVP 缓冲)
-		m_CommandList->SetGraphicsRootConstantBufferView(0, m_CBVResource->GetGPUVirtualAddress());
-
-		// 设置第二个根参数：SRV 根描述符 (结构化缓冲)，注意这里设置的是默认堆资源的 GPU 地址！
-		m_CommandList->SetGraphicsRootShaderResourceView(1, m_StructuredBufferDefaultResource->GetGPUVirtualAddress());
-
-		// 用于设置描述符堆用的临时 ID3D12DescriptorHeap 数组
-		ID3D12DescriptorHeap* _temp_DescriptorHeaps[] = { m_SRVHeap.Get() };
-		// 设置描述符堆
-		m_CommandList->SetDescriptorHeaps(1, _temp_DescriptorHeaps);
-
-		// 设置 SRV 句柄 (第三个根参数)，我们设置了一个纹理数组，只设置了一次哦！切换纹理索引都在 shader 中进行
-		// 相比每纹理单独绑定，用纹理数组的好处是没有切换开销，GPU 缓冲命中率很高，减少描述符堆压力，可以用于硬件实例化！
-		// 用纹理数组 + 结构化缓冲/常量缓冲 + 硬件实例化，可以快速绘制大量不同的方块实例 (甚至是其他东西！)
-		// 本质上是利用了 GPU Instancing 硬件实例化技术，设备上下文切换只需要一次
-		// 而且还能减少 CPU 需要传递的数据，增加带宽，相比第 7-8 章的写法要快很多 (不信可以用 PIX 测帧数)
-		// 缺点是灵活性低，每个纹理元素的长宽，Mipmap，纹理格式等等必须相同
-		m_CommandList->SetGraphicsRootDescriptorTable(2, SRVTextureArray_GPUHandle);
+			// 将起始转换屏障的资源指定为当前渲染目标
+			beg_barrier.Transition.pResource = m_D3D12RenderTarget[FrameIndex].Get();
+			// 调用资源屏障，将渲染目标由 Present 呈现(只读) 转换到 RenderTarget 渲染目标(只写)
+			m_CommandList->ResourceBarrier(1, &beg_barrier);
 
 
 
-		// 设置图元拓扑 (输入装配阶段)，我们这里设置三角形列表
-		m_CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			// 用 RTV 句柄设置渲染目标，同时用 DSV 句柄设置深度模板缓冲，开启深度测试
+			m_CommandList->OMSetRenderTargets(1, &RTVHandle, false, &DSVHandle);
 
-		// 设置 VBV 顶点缓冲描述符数组，两个 VBV 都会被设置 (输入装配阶段) 
-		m_CommandList->IASetVertexBuffers(0, 2, VertexBufferView);
+			// 清空当前渲染目标的背景为天蓝色，此操作会同时清理 3D 和 2D 的已渲染/绘制的对象 (清空整个后台窗口缓冲)
+			// 注意这里！不需要用到 D2DUIRender 里面的 m_D2DDeviceContext->Clear 了，原因：D2DRenderTarget = D3D12RenderTarget
+			m_CommandList->ClearRenderTargetView(RTVHandle, DirectX::Colors::SkyBlue, 0, nullptr);
 
-		// 设置 IBV 索引缓冲描述符 (输入装配阶段) 
-		m_CommandList->IASetIndexBuffer(&IndexBufferView);
-
-		// Draw Call 渲染所有目标实例！我们只用了一次 Draw Call 就完成了 1125 个方块的渲染！
-		m_CommandList->DrawIndexedInstanced(PreBlockIndexData.size(), BlockGroup.size(), 0, 0, 0);
+			// 清空后台的深度模板缓冲，将深度重置为初始值 1
+			m_CommandList->ClearDepthStencilView(DSVHandle, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
 
 
 
-		// 将终止转换屏障的资源指定为当前渲染目标
-		end_barrier.Transition.pResource = m_RenderTarget[FrameIndex].Get();
-		// 再通过一次资源屏障，将渲染目标由 RenderTarget 渲染目标(只写) 转换到 Present 呈现(只读)
-		m_CommandList->ResourceBarrier(1, &end_barrier);
+			// 第二次设置根签名，本次检测 PSO 根签名的合法性 (引用资源是否匹配)，检测成功会开启显存与寄存器的映射通道
+			m_CommandList->SetGraphicsRootSignature(m_RootSignature.Get());
 
-		// 关闭命令列表，Record 录制状态 -> Close 关闭状态，命令列表只有关闭才可以提交
-		m_CommandList->Close();
+			// 设置 PSO 渲染管线状态
+			m_CommandList->SetPipelineState(m_RenderBlockPSO.Get());
 
-		// 用于传递命令用的临时 ID3D12CommandList 数组
-		ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
+			// 设置第一个根参数：CBV 描述符 (MVP 缓冲)
+			m_CommandList->SetGraphicsRootConstantBufferView(0, m_CBVResource->GetGPUVirtualAddress());
 
-		// 执行上文的渲染命令！
-		m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
+			// 设置第二个根参数：SRV 根描述符 (结构化缓冲)，注意这里设置的是默认堆资源的 GPU 地址！
+			m_CommandList->SetGraphicsRootShaderResourceView(1, m_StructuredBufferDefaultResource->GetGPUVirtualAddress());
+
+			// 用于设置描述符堆用的临时 ID3D12DescriptorHeap 数组
+			ID3D12DescriptorHeap* _temp_DescriptorHeaps[] = { m_SRVHeap.Get() };
+			// 设置描述符堆
+			m_CommandList->SetDescriptorHeaps(1, _temp_DescriptorHeaps);
+
+			// 设置 SRV 句柄 (第三个根参数)，我们设置了一个纹理数组，切换纹理索引都在 shader 中进行
+			m_CommandList->SetGraphicsRootDescriptorTable(2, SRVTextureArray_GPUHandle);
+
+
+
+			// 设置图元拓扑 (输入装配阶段)，我们这里设置三角形列表
+			m_CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+			// 设置 VBV 顶点缓冲描述符数组，两个 VBV 都会被设置 (输入装配阶段) 
+			m_CommandList->IASetVertexBuffers(0, 2, VertexBufferView);
+
+			// 设置 IBV 索引缓冲描述符 (输入装配阶段) 
+			m_CommandList->IASetIndexBuffer(&IndexBufferView);
+
+			// Draw Call 一次渲染所有目标实例！
+			m_CommandList->DrawIndexedInstanced(PreBlockIndexData.size(), BlockGroup.size(), 0, 0, 0);
+
+
+
+			// 关闭命令列表，Record 录制状态 -> Close 关闭状态，命令列表只有关闭才可以提交
+			m_CommandList->Close();
+
+			// 用于传递命令用的临时 ID3D12CommandList 数组
+			ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
+
+			// 执行上文的渲染命令！
+			m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
+		}
+
+
+		// 向 GPU 提交完 3D 渲染命令后，CPU 准备记录 2D 渲染指令
+		m_D2DEngine.D2DUIRender(FrameIndex, WindowWidth, WindowHeight);
+
 
 		// 向命令队列发出交换缓冲的命令，此命令会加入到命令队列中，命令队列执行到该命令时，会通知交换链交换缓冲
+		// 3D 和 2D 绘制指令的记录与提交必须要在交换链 Present 之前，交换缓冲说明一帧已经画完了，开始绘制下一帧缓冲
 		m_DXGISwapChain->Present(1, NULL);
 
 
-
-		// 将围栏预定值设定为下一帧
+		// 将围栏预定值设定为下一帧的任务完成值，说明 GPU 完成了一项任务
 		FenceValue++;
 		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
-		// 命令队列执行到这里会修改围栏值，表示渲染已完成，"击中"围栏
+		// 命令队列执行到这里会修改围栏值，表示渲染已完成，"击中"围栏，同时修改围栏的 Completed Value 任务完成值
+		// 这里传入 FenceValue 是因为 CommandQueue 要用这个值标记预定事件，关联围栏
 		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
 		// 设置围栏的预定事件，当渲染完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
+		// 这里传入 FenceValue 是因为围栏要拿这个值开辟对应的 Event Slot 事件槽，并将 CPU 端事件句柄绑定到事件槽上
 		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
 	}
 
 
 	// 渲染循环
-	void STEP23_RenderLoop()
+	void STEP26_RenderLoop()
 	{
 		bool isExit = false;	// 是否退出
 		MSG msg = {};			// 消息结构体
@@ -1972,15 +2962,15 @@ public:
 
 
 	// 回调函数，处理窗口产生的消息
+	// 1-9 数字键 —— 切换选中的物品槽
+	// 滚轮 —— 切换选中的物品槽
 	// WASD 键 —— 摄像机前后左右移动
 	// 鼠标长按左键移动 —— 摄像机视角旋转
 	// 关闭窗口 —— 窗口关闭，程序进程退出
 	LRESULT CALLBACK CallBackFunc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 	{
-		// 用 switch 将第二个参数分流，每个 case 分别对应一个窗口消息
 		switch (msg)
 		{
-
 			case WM_DESTROY:			// 窗口被销毁 (当按下右上角 X 关闭窗口时)
 			{
 				PostQuitMessage(0);		// 向操作系统发出退出请求 (WM_QUIT)，结束消息循环
@@ -2011,6 +3001,24 @@ public:
 					case 'D':	// 向右移动
 						m_FirstCamera.Strafe(0.2);
 						break;
+
+
+					// 数字键，就设置 Selected_Slot_Index
+					case '1':
+					case '2':
+					case '3':
+					case '4':
+					case '5':
+					case '6':
+					case '7':
+					case '8':
+					case '9':
+					{
+						// 物品栏索引
+						UINT Selected_Slot_Index = wParam - '1';
+						m_D2DEngine.Set_Selected_Slot_Index(Selected_Slot_Index);
+					}
+					break;
 				}
 			}
 			break;
@@ -2024,20 +3032,46 @@ public:
 						m_FirstCamera.CameraRotate();
 						break;
 
-					// 按键没按，鼠标只是移动也要更新，否则就会发生摄像机视角瞬移
+						// 按键没按，鼠标只是移动也要更新，否则就会发生摄像机视角瞬移
 					default: m_FirstCamera.UpdateLastCursorPos();
 				}
 			}
 			break;
 
 
+			case WM_MOUSEWHEEL:		// 鼠标滚轮消息，和数字键功能一样切换选中框
+			{
+				// 获取当前滑槽索引
+				UINT Selected_Slot_Index = m_D2DEngine.Get_Selected_Slot_Index();
+
+				// 获取滚轮旋转量
+				int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+
+				// 向上滚动：切换到上一个槽
+				if (delta > 0) Selected_Slot_Index--;
+				// 向下滚动：切换到下一个槽
+				if (delta < 0) Selected_Slot_Index++;
+
+				// 无论如何滚动，Selected_Slot_Index 必须在 [0, 8] 之间，防止越界
+				Selected_Slot_Index = (Selected_Slot_Index + 9) % 9;
+
+				// 设置新索引
+				m_D2DEngine.Set_Selected_Slot_Index(Selected_Slot_Index);
+			}
+			break;
+
+
 			// 如果接收到其他消息，直接默认返回整个窗口
 			default: return DefWindowProc(hwnd, msg, wParam, lParam);
-
 		}
 
-		return 0;	// 注意这里！default 除外的分支都会运行到这里，因此需要 return 0，否则就会返回系统随机值，导致窗口无法正常显示
+		return 0;
 	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
 
 
 	// 运行窗口
@@ -2047,32 +3081,42 @@ public:
 		engine.STEP01_InitWindow(hins);
 		engine.STEP02_CreateDebugDevice();
 		engine.STEP03_CreateDevice();
-		engine.STEP04_CreateCommandComponents();
-		engine.STEP05_CreateRenderTarget();
-		engine.STEP06_CreateFenceAndBarrier();
-		engine.STEP07_CreateDSVHeap();
-		engine.STEP08_CreateDepthStencilBuffer();
-		engine.STEP09_CreateDSV();
-		engine.STEP10_CreateCameraCBVResource();
+		engine.STEP04_IgnoreClearValueWarning();
+		engine.STEP05_CreateCommandComponents();
+		engine.STEP06_CreateRenderTarget();
+		engine.STEP07_CreateFenceAndBarrier();
+		engine.STEP08_CreateDSVHeap();
+		engine.STEP09_CreateDepthStencilBuffer();
+		engine.STEP10_CreateDSV();
+		engine.STEP11_CreateCameraCBVResource();
 
-		engine.STEP11_LoadTextureGroup();
-		engine.STEP12_GetTextureArrayElementsProperties();
-		engine.STEP13_CreateTextureArrayResource();
-		engine.STEP14_CopyTextureArrayToDefaultResource();
-		engine.STEP15_CreateSRVHeap();
-		engine.STEP16_CreateTextureArraySRV();
 
-		engine.STEP17_CreateStructuredBufferResource();
-		engine.STEP18_CopyStructuredBufferToDefaultResource();
+		engine.STEP12_InitializeD2DEngine();
+		engine.STEP13_LoadImageAndTransform();
+		engine.STEP14_LoadAndGenerateBlockIcons();
 
-		engine.STEP19_CreateRootSignature();
-		engine.STEP20_CreatePSO();
-		engine.STEP21_CreatePerVertexAndIndexBuffer();
-		engine.STEP22_CreatePerInstanceBuffer();
 
-		engine.STEP23_RenderLoop();
+		engine.STEP15_GetTextureArrayElementsProperties();
+		engine.STEP16_CreateTextureArrayResource();
+		engine.STEP17_CopyTextureArrayToDefaultResource();
+		engine.STEP18_CreateSRVHeap();
+		engine.STEP19_CreateTextureArraySRV();
+
+
+		engine.STEP20_CreateStructuredBufferResource();
+		engine.STEP21_CopyStructuredBufferToDefaultResource();
+
+
+		engine.STEP22_CreateRootSignature();
+		engine.STEP23_CreatePSO();
+
+
+		engine.STEP24_CreatePerVertexAndIndexBuffer();
+		engine.STEP25_CreatePerInstanceBuffer();
+
+
+		engine.STEP26_RenderLoop();
 	}
-
 };
 
 

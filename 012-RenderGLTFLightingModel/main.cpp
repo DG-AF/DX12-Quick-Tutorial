@@ -2013,7 +2013,7 @@ public:
 		CBVRootConstantsDesc.ShaderRegister = 2;			// 要绑定的寄存器编号，这里对应 HLSL 的 b2 寄存器
 		CBVRootConstantsDesc.RegisterSpace = 0;				// 要绑定的命名空间，这里对应 HLSL 的 space0
 
-		RootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;				// 仅对像素着色器都可见
+		RootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;				// 常量缓冲对整个渲染管线都可见
 		RootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;	// 根参数的类型：Root Constants 根常量
 		RootParameters[2].Constants = CBVRootConstantsDesc;								// 填上文的结构体
 
@@ -2032,7 +2032,7 @@ public:
 		RootDescriptorTableDesc.pDescriptorRanges = &SRVDescriptorRangeDesc;	// Range 描述符范围指针
 		RootDescriptorTableDesc.NumDescriptorRanges = 1;						// 根描述表中 Range 的数量
 
-		RootParameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;				// 根参数在着色器中的可见性，这里指定仅在像素着色器可见 (只有像素着色器用到了纹理)
+		RootParameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;				// 着色器资源只有像素着色器可见 (只有像素着色器用到了纹理)
 		RootParameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;	// 根参数类型，这里我们选 Table 根描述表，一个根描述表占用 1 DWORD
 		RootParameters[3].DescriptorTable = RootDescriptorTableDesc;					// 根参数指针
 

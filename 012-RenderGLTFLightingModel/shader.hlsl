@@ -1,5 +1,6 @@
 
 // (12) RenderGLTFLightingModel: 加入光照，使用 DirectX 12 + Assimp 渲染《Ave Mujica》的 丰川祥子 gltf 骨骼模型
+// (2026-3-2) 鸣谢 littletoxic 大佬指正
 
 struct VSInput      // VS 阶段输入顶点数据
 {
@@ -13,8 +14,9 @@ struct VSInput      // VS 阶段输入顶点数据
 
 struct VSOutput     // VS 阶段输出顶点数据
 {
-	float4 position : SV_Position;		// 输出顶点的位置
-	float4 normal : NORMAL;				// 顶底法线，用于光照
+	float4 position : SV_Position;		// 输出顶点的位置 (光栅化阶段后会变成屏幕空间坐标)
+	float4 WorldPos : WORLDPOSITION;	// 顶点在世界空间的坐标，用于计算高光
+	float4 normal : NORMAL;				// 顶点法线，用于光照
 	float2 texcoordUV : TEXCOORD;		// 输出顶点纹理坐标时
 	float4 color : COLOR;				// 对于自发光纹理，可能带有的颜色
 };
@@ -56,8 +58,11 @@ VSOutput VSMain(VSInput input)
 	);
 	
 	
-	output.position = mul(input.position, BoneMatrix);	// 与骨骼权重矩阵相乘，得到静止状态下的真实位置
-	output.position = mul(output.position, MVP);		// 注意这里！顶点坐标还需要经过一次 MVP 变换！
+	// 与骨骼权重矩阵相乘，得到静止状态下的真实位置 (顶点模型空间/世界空间下的坐标，注意 PS 阶段也会用到)
+	output.WorldPos = mul(input.position, BoneMatrix);
+	// 注意这里！顶点坐标还需要经过一次 MVP 变换！
+	output.position = mul(output.WorldPos, MVP);
+	
 	
 	// 法线变换的公式是 N' = N * Inv(Transpose(Matrix)) 与原变换矩阵的逆转置矩阵相乘，此公式网上有推导过程
 	// 因为非均匀放缩变换，会破坏法线与面的垂直关系，导致变换错误，所以需要修正后的法线变换公式
@@ -131,7 +136,11 @@ float4 PSMain(VSOutput input) : SV_Target
 	
 	// 3. Specular 高光，模拟真实环境下，有光泽的物体经光线反射后上面出现的亮点
 	// 摄像机对当前像素的观察向量
-	float3 ViewDirection = normalize(CameraPosition.xyz - input.position.xyz);
+	// (2026-3-2) 谢谢 littletoxic 大佬，我原先这里写错了：
+	// float3 ViewDirection = normalize(CameraPosition.xyz - input.position.xyz);
+	// 这里的 input.position.xyz 是屏幕空间的坐标，观察向量需要顶点的世界空间坐标
+	float3 ViewDirection = normalize(CameraPosition.xyz - input.WorldPos.xyz);
+	
 	// 半程向量，传统 Phong 模型虽然得到了高光，但这个高光总是偏向于某个方向，而不是真实环境下一片区域下的高亮
 	// 原因是传统 Phong 模型只考虑了视线与反射光线的夹角，当夹角大于 90° 时，高光为 0，在镜面高光区域的边缘出现了明显的断层
 	// 1977 年 Blinn 引入了半程向量来改进这一点，半程向量是光线与视线方向向量相加的一个单位向量

@@ -1850,7 +1850,7 @@ public:
 		RootDescriptorTableDesc.pDescriptorRanges = &SRVDescriptorRangeDesc;	// Range 描述符范围指针
 		RootDescriptorTableDesc.NumDescriptorRanges = 1;						// 根描述表中 Range 的数量
 
-		RootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;				// 根参数在着色器中的可见性，这里指定仅在像素着色器可见 (只有像素着色器用到了纹理)
+		RootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;				// 着色器资源只有像素着色器可见 (只有像素着色器用到了纹理)
 		RootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;	// 根参数类型，这里我们选 Table 根描述表，一个根描述表占用 1 DWORD
 		RootParameters[1].DescriptorTable = RootDescriptorTableDesc;					// 根参数指针
 

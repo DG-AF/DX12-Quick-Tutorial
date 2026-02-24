@@ -22,8 +22,12 @@
   - [(14) RenderGLTFWithSkyBox](#14-RenderGLTFWithSkyBox)
 - [进阶篇](#15-DrawInstanced)
   - [(15) DrawInstanced](#15-DrawInstanced)
+  - [(16) D2DWithDX12](#16-D2DWithDX12)
+  - [(17) DrawItemsAndMerge](#17-DrawItemsAndMerge)
 
 ## 读者应该 clone 哪一个分支
+
+![branch.png](https://a2.boltp.com/2026/03/02/69a55c9182fa4.png)
 
 **master** 分支是已经开发完成的项目，这些会加入到标准教程中，建议读者使用这个分支的源码; <br/>
 **dev** 分支是实验性项目，这些项目有可能会被丢弃，也有可能被合并到 master 中，不建议读者使用；<br/>
@@ -31,10 +35,12 @@
 (备用 QQ：1281866925，备用邮箱：3976357120@qq.com)
 
 
-## 2026.2.20 小更新
+## 2026.3.2 更新
 
-1. 第 15 章文字教程更新：**DX12 快速教程(15) —— 多实例渲染** <br/>
-2. 修正部分代码以及文字描述
+1. 更新第 17 章代码：**DrawItemsAndMerge (DX12 快速教程(17) —— 立体图标与合并渲染)**<br/>
+2. 修正第 12 章 **shader.hlsl** 中高光部分的计算 **(input.position.xyz -> input.WorldPos.xyz)**，鸣谢 **littletoxic** 大佬<br/>
+3. 修正第 15 章 **STEP22_CreatePerInstanceBuffer**  中对 **BlockGroup** 的空间预分配 (resize -> reserve) 以及循环计算<br/>
+4. 修正其他部分代码与文字描述
 
 ## 前言
 
@@ -66,6 +72,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 [教程地址：DX12 快速教程(1) —— 做窗口](https://blog.csdn.net/DGAF2198588973/article/details/144488018)
 
+
 ### (2) DrawSkyblueWindow
 
 ![2.jpeg](https://a1.boltp.com/2026/01/29/697aec00b2fa2.jpeg)
@@ -73,6 +80,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 正式开始学习 DirectX 12 API，用 DirectX 12 渲染一个天蓝色窗口，初步认识并创建 DX12 的基本设备、描述符堆、描述符与资源
 
 [教程地址：DX12 快速教程(2) —— 渲染天蓝色窗口](https://blog.csdn.net/DGAF2198588973/article/details/144543014)
+
 
 ### (3) DrawRectangle
 
@@ -82,6 +90,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 [教程地址：DX12 快速教程(3) —— 画矩形](https://blog.csdn.net/DGAF2198588973/article/details/144874380)
 
+
 ### (4) DrawTexture
 
 ![4.jpeg](https://a1.boltp.com/2026/01/29/697aec00b2546.jpeg)
@@ -89,6 +98,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 用 DirectX 12 画一个钻石原矿，初步认识纹理，进一步学习根签名，认识 Root Descriptor Table 根描述表，接触 Shader Resource View 着色器资源描述符，体验 CPU 与 GPU 之间的交互与绑定过程
 
 [教程地址：DX12 快速教程(4) —— 画钻石原矿](https://blog.csdn.net/DGAF2198588973/article/details/145232320)
+
 
 ### (5) DrawBlock
 
@@ -98,6 +108,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 [教程地址：DX12 快速教程(5) —— 画方块](https://blog.csdn.net/DGAF2198588973/article/details/145391595)
 
+
 ### (6) FirstPersonView
 
 ![6.gif](https://a2.boltp.com/2026/01/29/697aed3a2dcf7.gif)
@@ -105,6 +116,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 初步认识 Camera 摄像机，在 DirectX 12 上构建第一人称视角，理解摄像机平移、视角旋转对 MVP 的影响，理解 DX12 的资源绑定与传递
 
 [教程地址：DX12 快速教程(6) —— 第一人称视角](https://blog.csdn.net/DGAF2198588973/article/details/146530258)
+
 
 ### (7) RenderMatchbox
 
@@ -114,6 +126,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 [教程地址：DX12 快速教程(7) —— 渲染火柴盒](https://blog.csdn.net/DGAF2198588973/article/details/147233643)
 
+
 ### (8) AlphaBlend
 
 ![8.gif](https://a2.boltp.com/2026/01/29/697aed3b26b8b.gif)
@@ -121,6 +134,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 用 DirectX 12 绘制玻璃等有透明像素的物体，初步了解透明测试/混合与渲染顺序的关系，了解 shader 文件的编译过程，学会不同 PSO 渲染管线状态的创建细节与设置顺序
 
 [教程地址：DX12 快速教程(8) —— 画玻璃](https://blog.csdn.net/DGAF2198588973/article/details/147780518)
+
 
 ### (9) AssimpAcquaintance
 
@@ -136,6 +150,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 [教程地址：DX12 快速教程(9) —— 初识 Assimp 库](https://blog.csdn.net/DGAF2198588973/article/details/155643538)
 
+
 ### (10) RenderGLTFModel
 
 ![10.gif](https://a2.boltp.com/2026/01/29/697aed7161329.gif)
@@ -143,6 +158,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 使用 DirectX 12 + Assimp 渲染《合金装备崛起:复仇》中的 塞穆尔·罗德里格斯 gltf 模型 (该模型没有绑定骨骼)，学会导入并使用模型文件、材质贴图、网格数据
 
 [教程地址：DX12 快速教程(10) —— 渲染模型](https://blog.csdn.net/DGAF2198588973/article/details/155771199)
+
 
 ### (11) RenderGLTFSkinnedModel
 
@@ -152,6 +168,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 [教程地址：DX12 快速教程(11) —— 渲染骨骼模型](https://blog.csdn.net/DGAF2198588973/article/details/155880215)
 
+
 ### (12) RenderGLTFLightingModel
 
 ![12.gif](https://a2.boltp.com/2026/01/29/697aed7132e89.gif)
@@ -160,6 +177,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 [教程地址：DX12 快速教程(12) —— Blinn-Phong 光照模型](https://blog.csdn.net/DGAF2198588973/article/details/156517324)
 
+
 ### (13) RenderGLTFAnimation
 
 ![13.gif](https://a2.boltp.com/2026/01/29/697aed70f204e.gif)
@@ -167,6 +185,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 加入骨骼动画，使用 DirectX 12 + Assimp 渲染《超次元游戏 海王星》中的 Neptune 涅普顿(绀紫之心) GLTF模型 的骨骼动画，了解骨骼动画的基本原理和流程，认识四元数及其应用，理解 Assimp 的数据存储方式
 
 [教程地址：DX12 快速教程(13) —— 蒙皮骨骼动画](https://blog.csdn.net/DGAF2198588973/article/details/157096831)
+
 
 ### (14) RenderGLTFWithSkyBox
 
@@ -184,6 +203,22 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 进阶篇开门第一篇，学会 DirectX 12 的纹理数组、SRV Structured Buffer 结构化缓冲的创建与使用，GPU Instancing 硬件实例化，以及多实例渲染的应用，一次性快速渲染大量方块 (1125 个方块)，第 7-8 章的那些方块类以及数据不用写了
 
 [教程地址：DX12 快速教程(15) —— 多实例渲染](https://blog.csdn.net/DGAF2198588973/article/details/158066553)
+
+
+### (16) D2DWithDX12
+
+![16.gif](https://a2.boltp.com/2026/03/02/69a5745fd5ab0.gif)
+
+认识新版本的 Direct2D (d2d 1.3，不是老版 1.0，老版本绑不上交换链)，学会使用 Direct2D 绘制简单的 UI 界面 (9 格物品快捷栏，物品选中框，经验槽，生命值，饥饿值，十字准星)，并与 DirectX 12 互动，将 D2D 绘制同步到 DirectX 12 的渲染目标中
+
+
+### (17) DrawItemsAndMerge
+
+![17.gif](https://a2.boltp.com/2026/03/02/69a57461ef2f3.gif)
+
+认识等轴变换，学会使用 Direct2D 的 3x2 矩阵变换，并与 DirectXMath 互动，认识位图渲染目标，生成轴侧视图下的方块图标，同时整合 D2D 和 DX12 的渲染，改装部分 WIC 加载纹理代码到 D2DEngine
+
+
 
 
 

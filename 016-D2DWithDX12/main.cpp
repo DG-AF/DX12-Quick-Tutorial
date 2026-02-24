@@ -2,10 +2,6 @@
 // (16) D2DWithDX12: 认识新版本的 Direct2D，学会使用 Direct2D 绘制简单的 UI 界面，并与 DirectX 12 互动
 
 
-// C++ 17 开始把 std::codecvt_utf8 给取消了，直接使用会报错 (和 scanf 一样)，加这个宏可以绕过报错，继续使用
-#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-
-
 #include<Windows.h>			// Windows 窗口编程核心头文件
 #include<d3d12.h>			// DX12 核心头文件
 #include<dxgi1_6.h>			// DXGI 头文件，用于管理与 DX12 相关联的其他必要设备，如 DXGI 工厂和 交换链
@@ -72,7 +68,7 @@ public:
 
 
 
-// D2D 引擎
+// D2D 引擎，用于 2D UI 绘制
 class D2DEngine
 {
 private:
@@ -142,7 +138,7 @@ private:
 	// ---------------------------------------------------------------------------------------------------------------
 
 
-	// 误区三：D2D_RECT_F 左上角 (left, top) 和右下角 (right, bottom) 的点 指的是几何坐标上的 "角点" 坐标
+	// 误区一：D2D_RECT_F 左上角 (left, top) 和右下角 (right, bottom) 的点 指的是几何坐标上的 "角点" 坐标
 	// 请注意，这两个点不是像素网格上 "包含首尾的像素区间"，D2D_RECT_F 定义的是 "几何角点坐标"，而不是 "像素行列"
 	// D2D_RECT_F 都是浮点数了，不要把它认为是某行某列像素，D2D 和 D3D12 一样有纹理插值采样方法 (DrawBitmap 第四个参数)
 	// 当指定左上角 (0, 0) 和右上角 (0, 0)，你得到的是一个 0 面积的矩形，而不是一个 1x1 的像素块
@@ -231,7 +227,7 @@ public:
 
 
 
-	// 利用第一步创建的 D3D11On12 设备，创建 D2D 相关设备
+	// 利用 D2D_STEP01_CreateD3D11Device 创建的 D3D11On12 设备，创建 D2D 相关设备
 	void D2D_STEP02_CreateD2DDevice()
 	{
 #if defined(_DEBUG)		// 如果是 DEBUG 调试，D2D 工厂选项增加调试等级，D2D1_DEBUG_LEVEL_INFORMATION 表示提供全部调试信息
@@ -433,12 +429,12 @@ public:
 		}
 
 
-		// 创建 m_FlippedHUDBitmap
+		// 创建 m_FlippedHUDBitmap，将上面已经创建好的 m_HUDBitmap 进行镜像翻转，并存储到新的 D2DBitmap 接口
 		{
 			// WIC 工厂先创建翻转器
 			m_WICFactory->CreateBitmapFlipRotator(&m_WICBitmapFlipRotator);
 
-			// 翻转器初始化，将转换后的位图镜像翻转，WICBitmapTransformFlipHorizontal 表示水平镜像
+			// 翻转器初始化，将转换后的位图镜像翻转，WICBitmapTransformFlipHorizontal 表示水平镜像翻转
 			m_WICBitmapFlipRotator->Initialize(m_WICFormatConverter.Get(), WICBitmapTransformFlipHorizontal);
 
 			// D2D 设备上下文从 WIC 位图资源中创建 D2DBitmap，这个 m_WICBitmapFlipRotator 也是 IWICBitmapSource 的子类
@@ -684,7 +680,7 @@ public:
 
 
 
-// DX12 引擎
+// DX12 引擎，主引擎，用于 3D 物体渲染
 class DX12Engine
 {
 private:
@@ -716,7 +712,7 @@ private:
 	HANDLE RenderEvent = NULL;								// GPU 渲染事件
 	D3D12_RESOURCE_BARRIER beg_barrier = {};				// 渲染开始的资源屏障，呈现 -> 渲染目标
 
-	// 误区一：渲染结束的资源屏障，渲染目标 -> 呈现
+	// 误区二：渲染结束的资源屏障，渲染目标 -> 呈现
 	// 下面的 m_D3D11On12Device->ReleaseWrappedResources 会自动帮我们做 RenderTarget -> Present 的呈现
 	// (因为 D2D，D3D11 经过 D3D11On12 Device 包装后的渲染目标接口，实际指向的都是 D3D12RenderTarget)
 	// 下文 CommandQueue 开始执行 3D 绘制指令的时候，我们还需要进行 2D 渲染，仍然需要 RenderTarget 状态
@@ -975,12 +971,14 @@ public:
 		m_CommandList->ResourceBarrier(1, &beg_barrier);
 
 
-		// 误区二：清空当前渲染目标的背景为天蓝色，此操作会同时清理 3D 和 2D 的已渲染/绘制的对象 (清空整个后台窗口缓冲)
-		// 注意这里！下面不需要用到 m_D2DDeviceContext->Clear 了，原因：D2DRenderTarget = D3D12RenderTarget
-		m_CommandList->ClearRenderTargetView(RTVHandle, DirectX::Colors::SkyBlue, 0, nullptr);
 
 		// 用 RTV 句柄设置渲染目标
 		m_CommandList->OMSetRenderTargets(1, &RTVHandle, false, nullptr);
+
+		// 误区三：清空当前渲染目标的背景为天蓝色，此操作会同时清理 3D 和 2D 的已渲染/绘制的对象 (清空整个后台窗口缓冲)
+		// 注意这里！不需要用到 D2DUIRender 里面的 m_D2DDeviceContext->Clear 了，原因：D2DRenderTarget = D3D12RenderTarget
+		m_CommandList->ClearRenderTargetView(RTVHandle, DirectX::Colors::SkyBlue, 0, nullptr);
+
 
 
 		/*
@@ -1058,7 +1056,7 @@ public:
 						}
 						else
 						{
-							isExit = true;							// 收到退出消息，就退出消息循环
+							isExit = true;				// 收到退出消息，就退出消息循环
 						}
 					}
 				}
@@ -1178,9 +1176,9 @@ public:
 				int delta = GET_WHEEL_DELTA_WPARAM(wParam);
 
 				// 向上滚动：切换到上一个槽
-				if (delta < 0) Selected_Slot_Index--;
+				if (delta > 0) Selected_Slot_Index--;
 				// 向下滚动：切换到下一个槽
-				if (delta > 0) Selected_Slot_Index++;
+				if (delta < 0) Selected_Slot_Index++;
 
 				// 无论如何滚动，Selected_Slot_Index 必须在 [0, 8] 之间，防止越界
 				Selected_Slot_Index = (Selected_Slot_Index + 9) % 9;

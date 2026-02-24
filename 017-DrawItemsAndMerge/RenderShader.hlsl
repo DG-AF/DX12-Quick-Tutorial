@@ -1,11 +1,11 @@
 
-// (15) DrawInstanced: 学会 DirectX 12 的纹理数组、SRV Structured Buffer 结构化缓冲的创建与使用，以及多实例渲染的应用，一次性快速渲染大量方块
+// (17) DrawItemsAndMerge: 认识等轴变换，学会在 2D 上渲染立体图标，同时整合 D2D 和 DX12 的渲染
 // RenderShader.hlsl: 渲染方块的 shader
 
 // 用于 MVP 矩阵的常量缓冲
 cbuffer GlobalData : register(b0, space0)
 {
-	row_major float4x4 MVPMatrix;	// 摄像机提供 MVP 矩阵，将顶点从世界空间变换到齐次裁剪空间
+	row_major float4x4 MVPMatrix; // 摄像机提供 MVP 矩阵，将顶点从世界空间变换到齐次裁剪空间
 }
 
 // 立方体面结构体，数组索引表示对应的立方体面，数组元素值表示 对应面所用纹理 指向 纹理数组 的索引
