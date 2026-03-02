@@ -24,6 +24,7 @@
   - [(15) DrawInstanced](#15-DrawInstanced)
   - [(16) D2DWithDX12](#16-D2DWithDX12)
   - [(17) DrawItemsAndMerge](#17-DrawItemsAndMerge)
+  - [(18) ScreenSpaceRaycast](#18-ScreenSpaceRaycast)
 
 ## 读者应该 clone 哪一个分支
 
@@ -35,12 +36,10 @@
 (备用 QQ：1281866925，备用邮箱：3976357120@qq.com)
 
 
-## 2026.3.2 更新
+## 2026.3.6 更新
 
-1. 更新第 17 章代码：**DrawItemsAndMerge (DX12 快速教程(17) —— 立体图标与合并渲染)**<br/>
-2. 修正第 12 章 **shader.hlsl** 中高光部分的计算 **(input.position.xyz -> input.WorldPos.xyz)**，鸣谢 **littletoxic** 大佬<br/>
-3. 修正第 15 章 **STEP22_CreatePerInstanceBuffer**  中对 **BlockGroup** 的空间预分配 (resize -> reserve) 以及循环计算<br/>
-4. 修正其他部分代码与文字描述
+1. 更新第 18 章代码：**018-ScreenSpaceRaycast (DX12 快速教程(18) —— 屏幕射线相交检测)**<br/>
+2. 修正部分代码与文字描述
 
 ## 前言
 
@@ -221,6 +220,15 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 认识等轴变换，学会使用 Direct2D 的 3x2 矩阵变换，并与 DirectXMath 互动，认识位图渲染目标，生成轴侧视图下的方块图标，同时整合 D2D 和 DX12 的渲染，改装部分 WIC 加载纹理代码到 D2DEngine
 
 [教程地址：DX12 快速教程(17) —— 立体图标与合并渲染]()
+
+
+### (18) ScreenSpaceRaycast
+
+![18.gif](https://a2.boltp.com/2026/03/06/69aa50691c52e.gif)
+
+认识屏幕射线相交检测，学会方块的破坏与放置，理解 PSO 的 IA 输入布局复用，学会如何利用 PSO 解决深度冲突，初步学习 D3D12 资源的数据动态添加与删除。本章不难，但是需要改动的量比较大，新增的业务逻辑较多，需要细心和耐心
+
+[教程地址：DX12 快速教程(18) —— 屏幕射线相交检测]()
 
 
 

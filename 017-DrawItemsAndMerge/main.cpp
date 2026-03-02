@@ -1499,7 +1499,7 @@ private:
 		L"resource/stone_slab_top.png",					// 36.平滑石
 		L"resource/quartz_block_bottom.png",			// 37.石英块底面
 		L"resource/quartz_block_side.png",				// 38.石英块侧面
-		L"resource/quartz_block_top.png",				// 39.石英块顶面
+		L"resource/quartz_block_top.png"				// 39.石英块顶面
 	};
 
 
@@ -1667,10 +1667,10 @@ private:
 		{ XMFLOAT4(1, 1, -1, 1), XMFLOAT2(0, 1), 4 },
 
 		// 下面 (-Y, FaceIndex = 5)
-		{ XMFLOAT4(-1, -1, -1, 1), XMFLOAT2(0, 0), 5 },
-		{ XMFLOAT4(-1, -1, 1, 1), XMFLOAT2(1, 0), 5 },
-		{ XMFLOAT4(1, -1, 1, 1), XMFLOAT2(1, 1), 5 },
-		{ XMFLOAT4(1, -1, -1, 1), XMFLOAT2(0, 1), 5 },
+		{ XMFLOAT4(1, -1, -1, 1), XMFLOAT2(0, 0), 5 },
+		{ XMFLOAT4(1, -1, 1, 1), XMFLOAT2(1, 0), 5 },
+		{ XMFLOAT4(-1, -1, 1, 1), XMFLOAT2(1, 1), 5 },
+		{ XMFLOAT4(-1, -1, -1, 1), XMFLOAT2(0, 1), 5 }
 	};
 
 	// 每个方块实例共用的索引数据
