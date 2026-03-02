@@ -2599,7 +2599,7 @@ public:
 		PSODesc.PS.BytecodeLength = PixelShaderBlob->GetBufferSize();			// PS 字节码数据长度
 
 		// Rasterizer 光栅化
-		PSODesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;		// 不进行剔除，渲染的方块有玻璃，有深度缓冲和混合兜底
+		PSODesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;		// 进行背面剔除，无透明方块，加快渲染效率
 		PSODesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;		// 纯色填充
 
 		// 第一次设置根签名！本次设置是将根签名与 PSO 绑定，生成对应版本的根签名适配 PSO，设置渲染管线的输入参数状态
@@ -2649,7 +2649,6 @@ public:
 		// 最终创建 PSO 对象
 		m_D3D12Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&m_RenderBlockPSO));
 	}
-
 
 
 
@@ -2794,6 +2793,7 @@ public:
 	}
 
 
+
 	// 渲染
 	void Render()
 	{
@@ -2906,6 +2906,7 @@ public:
 		// 这里传入 FenceValue 是因为围栏要拿这个值开辟对应的 Event Slot 事件槽，并将 CPU 端事件句柄绑定到事件槽上
 		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
 	}
+
 
 
 	// 渲染循环
