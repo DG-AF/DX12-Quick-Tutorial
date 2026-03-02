@@ -209,7 +209,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 ![16.gif](https://a2.boltp.com/2026/03/02/69a5745fd5ab0.gif)
 
-认识新版本的 Direct2D (d2d 1.3，不是老版 1.0，老版本绑不上交换链)，学会使用 Direct2D 绘制简单的 UI 界面 (9 格物品快捷栏，物品选中框，经验槽，生命值，饥饿值，十字准星)，并与 DirectX 12 互动，将 D2D 绘制同步到 DirectX 12 的渲染目标中
+认识新版本的 Direct2D (d2d 1.3，不是老版 1.0，老版本绑不上 DirectX 12 的交换链)，学会使用 Direct2D 绘制简单的 UI 界面 (9 格物品快捷栏，物品选中框，经验槽，生命值，饥饿值，十字准星)，并与 DirectX 12 互动，将 D2D 绘制同步到 DirectX 12 的渲染目标中
 
 
 ### (17) DrawItemsAndMerge
