@@ -58,10 +58,12 @@ VSOutput VSMain(VSInput input)
 	);
 	
 	
-	// 与骨骼权重矩阵相乘，得到静止状态下的真实位置 (顶点模型空间/世界空间下的坐标，注意 PS 阶段也会用到)
-	output.WorldPos = mul(input.position, BoneMatrix);
+	// 与骨骼权重矩阵相乘，得到静止状态下的真实位置 (顶点模型空间下的坐标)
+	input.position = mul(input.position, BoneMatrix);
+	// 世界空间位置需要经过 WorldMatrix 变换（PS 阶段的光照需要世界空间坐标）
+	output.WorldPos = mul(input.position, WorldMatrix);
 	// 注意这里！顶点坐标还需要经过一次 MVP 变换！
-	output.position = mul(output.WorldPos, MVP);
+	output.position = mul(input.position, MVP);
 	
 	
 	// 法线变换的公式是 N' = N * Inv(Transpose(Matrix)) 与原变换矩阵的逆转置矩阵相乘，此公式网上有推导过程
