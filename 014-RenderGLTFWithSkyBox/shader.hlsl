@@ -24,7 +24,7 @@ cbuffer GlobalData : register(b0, space0)
 {
 	row_major float4x4 MVP; // MVP 矩阵
 	
-	row_major float4x4 BoneTransformMatrixGroup[512]; // 骨骼偏移矩阵组，每个矩阵对应一块骨骼，这里仅设置了最多 512 个骨骼，实际可以更多
+	row_major float4x4 BoneTransformMatrixGroup[550]; // 骨骼偏移矩阵组，每个矩阵对应一块骨骼，这里仅设置了最多 550 个骨骼，实际可以更多
 }
 
 
@@ -71,10 +71,10 @@ float4 PSMain(VSOutput input) : SV_Target
 	float4 DiffuseColor = float4(1, 1, 1, 0);
 
 	
-	// 如果是默认纹理或自发光纹理 (在 C++ 端的纹理 UV 坐标会设置成 -1)，进行特殊处理
+	// 如果是默认纹理 (在 C++ 端的纹理 UV 坐标会设置成 -1)，进行特殊处理
 	if (input.texcoordUV.x == -1 && input.texcoordUV.y == -1)
 	{
-		DiffuseColor = input.color; // 直接赋值自带颜色
+		clip(-1);	// 像素丢弃就行，采样默认纹理会很怪
 	}
 	else
 	{

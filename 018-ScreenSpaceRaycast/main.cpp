@@ -1464,7 +1464,7 @@ private:
 	};
 	CBuffer* m_ConstantBuffer = nullptr;		// 常量缓冲结构体指针，下文 Map 后指针会指向 CBVResource 的地址
 
-	Camera m_FirstCamera;			// 第一人称摄像机
+	Camera m_FirstCamera;						// 第一人称摄像机
 
 
 
@@ -1749,7 +1749,7 @@ private:
 	ComPtr<ID3D12Resource> m_BlockVertexResource;
 	// 上传堆索引资源
 	ComPtr<ID3D12Resource> m_BlockIndexResource;
-	// 上传堆实例资源
+	// 上传堆实例资源 (这个是动态资源，总大小固定，但是里面的数据是动态的，数量可以变化)
 	ComPtr<ID3D12Resource> m_BlockInstanceResource;
 
 	// 上传堆实例资源分配的总大小 (最多能放多少个实例，我们这里设置最多能放 10000 个方块)
@@ -2510,7 +2510,7 @@ public:
 		// 把更新频率高的根参数放前面，低的放后面，可以优化性能 (微软官方文档建议)
 		// 因为 DirectX API 能对根签名进行 Version Control 版本控制，在根签名越前面的根参数，访问速度更快
 
-		// 第一个根参数：CBV 根描述符 (MVP 矩阵)，根描述符是内联描述符，所以下文绑定根参数时，只需要传递常量缓冲资源的地址即可
+		// 第一个根参数：CBV 根描述符 (常量缓冲)，根描述符是内联描述符，所以下文绑定根参数时，只需要传递常量缓冲资源的地址即可
 		D3D12_ROOT_DESCRIPTOR CBVRootDescriptorDesc = {};					// CBV 根描述符信息结构体
 		CBVRootDescriptorDesc.ShaderRegister = 0;							// 要绑定的寄存器编号，这里对应 HLSL 的 b0 寄存器
 		CBVRootDescriptorDesc.RegisterSpace = 0;							// 要绑定的命名空间，这里对应 HLSL 的 space0

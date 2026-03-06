@@ -567,7 +567,7 @@ private:
 	struct CBuffer								// 常量缓冲结构体
 	{
 		XMFLOAT4X4 MVPMatrix;					// MVP 矩阵，用于将顶点数据从顶点空间变换到齐次裁剪空间
-		XMFLOAT4X4 BoneTransformMatrix[512];	// 骨骼偏移矩阵组，每个矩阵对应一块骨骼，这里仅设置了最多 512 个骨骼，实际可以更多
+		XMFLOAT4X4 BoneTransformMatrix[550];	// 骨骼偏移矩阵组，每个矩阵对应一块骨骼，这里仅设置了最多 550 个骨骼，实际可以更多
 	};
 	CBuffer* MVPBuffer = nullptr;	// 常量缓冲结构体指针，里面存储的是 MVP 矩阵信息，下文 Map 后指针会指向 CBVResource 的地址
 
@@ -1982,7 +1982,7 @@ public:
 		StaticSamplerDesc[1].ShaderRegister = 1;									// s1，注意这里！
 		StaticSamplerDesc[1].RegisterSpace = 0;										// space0
 		StaticSamplerDesc[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-		StaticSamplerDesc[1].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;	// 注意这里！
+		StaticSamplerDesc[1].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;				// 注意这里！这里要使用三线性过滤
 		StaticSamplerDesc[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;			// 注意这里！
 		StaticSamplerDesc[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;			// 注意这里！
 		StaticSamplerDesc[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
@@ -2112,7 +2112,7 @@ public:
 		PSODesc.PS.BytecodeLength = PixelShaderBlob->GetBufferSize();			// PS 字节码数据长度
 
 		// Rasterizer 光栅化
-		PSODesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;		// 剔除模式，指定是否开启背面/正面/不剔除，这里选背面剔除
+		PSODesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;		// 剔除模式，这里选背面剔除，至于为什么左手扇面画不出...
 		PSODesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;		// 填充模式，指定是否开启纯色/线框填充，这里选纯色填充
 
 		// 第一次设置根签名！本次设置是将根签名与 PSO 绑定，设置渲染管线的输入参数状态

@@ -25,6 +25,7 @@
   - [(16) D2DWithDX12](#16-D2DWithDX12)
   - [(17) DrawItemsAndMerge](#17-DrawItemsAndMerge)
   - [(18) ScreenSpaceRaycast](#18-ScreenSpaceRaycast)
+  - [(19) PerlinNoise](#19-PerlinNoise)
 
 ## 读者应该 clone 哪一个分支
 
@@ -36,9 +37,9 @@
 (备用 QQ：1281866925，备用邮箱：3976357120@qq.com)
 
 
-## 2026.3.6 更新
+## 2026.3.9 更新
 
-1. 更新第 18 章代码：**018-ScreenSpaceRaycast (DX12 快速教程(18) —— 屏幕射线相交检测)**<br/>
+1. 更新第 19 章代码：**019-PerlinNoise (DX12 快速教程(19) —— 柏林噪声)**<br/>
 2. 修正部分代码与文字描述
 
 ## 前言
@@ -210,7 +211,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 认识新版本的 Direct2D (d2d 1.3，不是老版 1.0，老版本绑不上 DirectX 12 的交换链)，学会使用 Direct2D 绘制简单的 UI 界面 (9 格物品快捷栏，物品选中框，经验槽，生命值，饥饿值，十字准星)，并与 DirectX 12 互动，将 D2D 绘制同步到 DirectX 12 的渲染目标中
 
-[教程地址：DX12 快速教程(16) —— D2D 与 D3D12 互操作]()
+[教程地址：DX12 快速教程(16) —— D2D 与 D3D12 互操作](https://blog.csdn.net/DGAF2198588973/article/details/158853736)
 
 
 ### (17) DrawItemsAndMerge
@@ -219,7 +220,7 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 认识等轴变换，学会使用 Direct2D 的 3x2 矩阵变换，并与 DirectXMath 互动，认识位图渲染目标，生成轴侧视图下的方块图标，同时整合 D2D 和 DX12 的渲染，改装部分 WIC 加载纹理代码到 D2DEngine
 
-[教程地址：DX12 快速教程(17) —— 立体图标与合并渲染]()
+[教程地址：DX12 快速教程(17) —— 立体图标与合并渲染](https://blog.csdn.net/DGAF2198588973/article/details/158853768)
 
 
 ### (18) ScreenSpaceRaycast
@@ -228,8 +229,16 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 认识屏幕射线相交检测，学会方块的破坏与放置，理解 PSO 的 IA 输入布局复用，学会如何利用 PSO 解决深度冲突，初步学习 D3D12 资源的数据动态添加与删除。本章不难，但是需要改动的量比较大，新增的业务逻辑较多，需要细心和耐心
 
-[教程地址：DX12 快速教程(18) —— 屏幕射线相交检测]()
+[教程地址：DX12 快速教程(18) —— 屏幕射线相交检测](https://blog.csdn.net/DGAF2198588973/article/details/158853797)
 
+
+### (19) PerlinNoise
+
+![19.gif](https://a2.boltp.com/2026/03/09/69aee0dac6730.gif)
+
+初步学习计算着色器、UAV Resource 无序访问资源、Readback Heap 回读堆，理解并运用柏林噪声生成简单的地形网格 (柏林噪声就长这样的，想要获得原版那样的游戏效果，需要叠加其他噪声)
+
+[教程地址：DX12 快速教程(19) —— 柏林噪声](https://blog.csdn.net/DGAF2198588973/article/details/158853809)
 
 
 
