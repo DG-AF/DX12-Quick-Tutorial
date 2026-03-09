@@ -1,5 +1,5 @@
 
-// (18) ScreenSpaceRaycast: 认识屏幕射线相交检测，学会方块的破坏与放置，理解 PSO 的 IA 输入布局复用，学会如何利用 PSO 解决深度冲突
+// (20) ParticleSystem: 进一步学习计算着色器，学习粒子的动态生成与销毁，模拟 Minecraft 的粒子破坏效果
 
 
 #include<Windows.h>				// Windows 窗口编程核心头文件
@@ -25,6 +25,7 @@
 #include<vector>				// C++ STL vector 容器库
 #include<codecvt>				// C++ 字符编码转换库，用于 string 转 wstring
 #include<iomanip>				// C++ 输入输出控制格式化库，用于 CallBackFunc 的 std::fixed 与 std::setprecision
+#include<random>				// C++ 高质量随机库，用于生成随机数
 
 
 #pragma comment(lib,"d3d12.lib")			// 链接 DX12 核心 DLL
@@ -232,9 +233,7 @@ private:
 	UINT DPI = 0;	// 窗口 DPI
 
 	// D3D11 用于包装的渲染目标资源 (后台缓冲)，数量和 D3D12 一致
-	// Wrapped 包装，是一种软件设计思想，意思类似于将 D3D12 资源层层包装 (转换) 成 D2D 能用的资源接口
-	// 但 D2D 内部并不拥有这个资源的真实显存，只是得到了 D3D12 资源翻译后的使用权，资源还是 D3D12 的，一点都没变过
-	// Wrapped 包装本质上只是做了一个翻译，没有创建新的资源，和上面的 CallBackWrapper 转换回调函数并塞进 Win32API 原理是一样的
+	// D2D 内部并不拥有这个资源的真实显存，只是得到了 D3D12 资源翻译后的使用权，资源还是 D3D12 的，一点都没变过
 	ComPtr<ID3D11Resource> m_D3D11WrappedRenderTarget[3];
 	// D2D 渲染目标资源 (后台缓冲)，数量和 D3D12 一致，别看接口类型不同，实际指向的显存 (数据来源) 仍然是 D3D12RenderTarget
 	ComPtr<ID2D1Bitmap1> m_D2DRenderTarget[3];
@@ -254,11 +253,11 @@ private:
 
 	// 物品栏所属的位图，包括 9 格快捷物品栏，和一个选中框
 	ComPtr<ID2D1Bitmap> m_InventoryBitmap;
-	// HUD (Heads-up display，抬头显示器) 界面元素所属的位图，包含生命值、护甲值、饥饿值、经验槽等
-	// HUD 在游戏中指的就是一直叠加在游戏画面上，为你实时显示各种状态信息的界面元素
+	// HUD 界面元素所属的位图，包含生命值、护甲值、饥饿值、经验槽等
 	ComPtr<ID2D1Bitmap> m_HUDBitmap;
 	// 水平镜像翻转的 HUD 界面位图，用于绘制右侧饱食度
 	ComPtr<ID2D1Bitmap> m_FlippedHUDBitmap;
+
 
 	// 物品栏展示方块的位图
 	std::vector<ComPtr<ID2D1Bitmap>> m_InventoryBlockBitmaps;
@@ -270,7 +269,7 @@ private:
 	std::wstring HUDBitmapFileName = L"UIresource/icons.png";
 
 
-	// 物品栏方块使用的纹理
+	// 物品栏使用的纹理
 	std::vector<std::wstring> InventoryBlockNames =
 	{
 		// 0.熔炉
@@ -284,20 +283,18 @@ private:
 		// 2.TNT
 		L"resource/tnt_side.png",
 		L"resource/tnt_top.png",
-		// 3.活塞
-		L"resource/piston_side.png",
-		L"resource/piston_top_normal.png",
-		// 4.石英块
-		L"resource/quartz_block_side.png",
-		L"resource/quartz_block_top.png",
-		// 5.发射器
-		L"resource/piston_bottom.png",
-		L"resource/dispenser_front_horizontal.png",
-		// 6.书架
+		// 3.橡木原木
+		L"resource/log_oak.png",
+		L"resource/log_oak_top.png",
+		// 4.橡木木板
 		L"resource/planks_oak.png",
+		// 5.书架
 		L"resource/bookshelf.png",
-		// 7.钻石原矿
-		L"resource/diamond_ore.png",
+		// 6.泥土
+		L"resource/dirt.png",
+		// 7.草方块
+		L"resource/grass_top.png",
+		L"resource/grass_side.png",
 		// 8.萤石
 		L"resource/glowstone.png"
 	};
@@ -308,7 +305,7 @@ private:
 
 
 
-	// 本次我们要渲染物品栏内的方块，之所以在 2D 平面上也能呈现立体感，是因为它们使用轴侧视图
+	// 我们要渲染物品栏内的方块，之所以在 2D 平面上也能呈现立体感，是因为它们使用轴侧视图
 	// 物品栏中的方块以固定的等轴测视角显示，这样能使 正面 (+X)，后面 (-Z)，上面 (+Y) 同时扁平化呈现在平面上
 	// 我们需要提供正方体数据，对这个正方体进行等轴侧变换，再往这个扁平化的正方体贴纹理 (D2D 位图)
 
@@ -358,12 +355,12 @@ private:
 		{0, 1, 2},		// 0.熔炉
 		{3, 4, 5},		// 1.工作台
 		{6, 6, 7},		// 2.TNT
-		{8, 8, 9},		// 3.活塞
-		{10, 10, 11},	// 4.石英块
-		{13, 12, 12},	// 5.发射器
-		{15, 15, 14},	// 6.书架
-		{16, 16, 16},	// 7.钻石原矿
-		{17, 17, 17}	// 8.活塞
+		{8, 8, 9},		// 3.橡木原木
+		{10, 10, 10},	// 4.橡木木板
+		{11, 11, 10},	// 5.书架
+		{12, 12, 12},	// 6.泥土
+		{14, 14, 13},	// 7.草方块
+		{15, 15, 15},	// 8.萤石
 	};
 
 
@@ -508,33 +505,18 @@ public:
 	// 在上面各种设备的基础上，逐步翻译、包装、转化并绑定 D3D12RenderTarget 到 D2DRenderTarget 上
 	void D2D_STEP03_CreateD2DRenderTarget(HWND MainWindowHwnd, ComPtr<ID3D12Resource>(&m_D3D12RenderTarget)[3])
 	{
-		// 获取 DPI (Dots Per Inch 每英寸点数)，它描述了显示设备的像素密度，即在一英寸的长度内可以排列多少个像素点
-		// 在 Direct2D 以及一般的 UI 开发中，DPI 至关重要，因为它直接影响着文字、图形和 UI 元素在不同显示器上的物理尺寸
-		// DPI 与屏幕分辨率是紧密相关的，如果不考虑 DPI，同一个应用在低分辨率和高分辨率屏幕上显示时，
-		// 元素要么太小 (在高 DPI 屏上) 要么太大 (在低 DPI 屏上)，用户体验会很差
-
 		// 利用 GetDpiForWindow 获取窗口的 DPI
 		DPI = GetDpiForWindow(MainWindowHwnd);
 
 
 		// D2D 位图属性，渲染目标其实就是一个特殊纹理 (2D 位图)，这一点在 D3D11 和 D2D 道理也是一样的
 		D2D1_BITMAP_PROPERTIES1 BitmapProperties = {};
-		// 设置位图选项 (标志)
-		// D2D1_BITMAP_OPTIONS_TARGET 表示该位图可以被设置为渲染目标
-		// D2D1_BITMAP_OPTIONS_CANNOT_DRAW 表示该位图不能作为绘制操作的来源，
-		// 不能用于 ID2D1DeviceContext::DrawBitmap 做输入参数，更不能用于创建 ID2D1BitmapBrush 位图画刷 (后面的教程再涉及)
-		// 指定这两个标志，表示创建一个专用渲染目标，作为最终输出的画板，而不是作为中间资源被反复利用
-		// Direct2D 驱动层可能会因此进行一些优化，比如不需要为它创建着色器资源描述符 (SRV Descriptor)，从而节省资源
+		// 设置位图选项 (标志)，指定这两个标志，表示创建一个专用渲染目标，作为最终输出的画板，而不是作为中间资源被反复利用
 		BitmapProperties.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
 
 		// 渲染目标的 DXGI_FORMAT 指定 DXGI_FORMAT_UNKNOWN，会自动匹配表面格式
 		BitmapProperties.pixelFormat.format = DXGI_FORMAT_UNKNOWN;
-		// 指定像素颜色值采用预乘 alpha 格式存储，相当于渲染目标上色会自动进行 SrcRGB * SrcA 的操作
-		// 传统的直接 alpha (或称非预乘、straight alpha) 格式中，RGB 分量是独立于 alpha 存储的，合成时需要实时计算
-		// 预乘 alpha 可以避免在合成时因颜色与 alpha 相乘而产生的色偏或边缘锯齿问题
-		// 例如，在绘制带有半透明边缘的纹理时，直接 alpha 可能导致边缘出现暗色光晕，而预乘格式已经将颜色与透明度融合，合成结果更自然
-		// 预乘后的颜色可以直接与背景进行加法混合 (SrcRGB + DstRGB * (1 - SrcA))，可以节省一次乘法操作 (虽然性能提升微乎其微)
-		// 许多 GPU 内部处理纹理时更倾向于预乘格式，可以减少着色器中的计算
+		// 指定像素颜色值采用预乘 alpha 格式存储，可以减少着色器中的计算
 		BitmapProperties.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
 
 		// 设置渲染目标 x,y 轴的 DPI，两个都是一样的
@@ -558,8 +540,7 @@ public:
 				&D3D11WrappedBackBufferFlag, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT,
 				IID_PPV_ARGS(&m_D3D11WrappedRenderTarget[i]));
 
-			// 用于临时转化和翻译用的 DXGISurface 接口，对于上面那几个渲染目标资源，D2D 只认 DXGISurface，我们需要先转化成这个
-			// DXGISurface 是 DXGI 为所有图形 API 定义的，用于表示 2D 图像数据的统一接口 (如何转化不同接口就是另外一回事了)
+			// 用于临时转化和翻译用的 DXGISurface 接口，对于上面那几个渲染目标资源，D2D 只认 DXGISurface
 			ComPtr<IDXGISurface> _temp_DXGISurface;
 
 			// 将 D3D11WrappedResource 的数据继承到 DXGISurface
@@ -577,13 +558,18 @@ public:
 
 
 
+	// WIC 工厂初始化函数，仅初始化 WIC 工厂，一个进程重复释放创建 WIC 工厂会报错
+	void D2D_STEP04_InitializeWICFactory()
+	{
+		CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_WICFactory));
+	}
+
+
+
 	// WIC 从 resource 读取 UI 图集，然后通过 D2DDeviceContext 的成员方法创建并转化成 D2DBitmap
 	// Atlas 图集，相当于包含所有界面小元素的大图，是纹理图片的一种形式
-	bool D2D_STEP04_LoadUIAtlasIntoD2DBitmaps()
+	bool D2D_STEP05_LoadUIAtlasIntoD2DBitmaps()
 	{
-		// 先创建 WIC 工厂，WIC 工厂每个进程实例只能持有一次，重复创建会报错
-		CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_WICFactory));
-
 		// 创建 m_InventoryBitmap
 		{
 			// 读取图片数据并创建解码器
@@ -751,7 +737,7 @@ public:
 
 	// DX12Engine 传递要加载的纹理名，WIC 再次读取图片，并将它们转换成 DX12 可用的 WICBitmapSource
 	// vector 是一个 inout 输入输出参数，外部 (DX12Engine) 提供 vector，此函数逐一创建 vector 中的元素
-	bool D2D_STEP05_LoadTextureIntoWICBitmaps(
+	bool D2D_STEP06_LoadTextureIntoWICBitmaps(
 		const std::vector<std::wstring>& TextureNames,
 		std::vector<ComPtr<IWICBitmapSource>>& TextureGroup)
 	{
@@ -834,9 +820,7 @@ public:
 
 
 	// 计算等轴变换矩阵 (模型空间 -> 屏幕空间)，并对方块物品顶点数据进行等轴变换
-	// 这个等轴变换属于正交投影，是轴侧投影的一个特例，没有"近大远小"的透视效果
-	// 等轴测投影中，三个坐标轴的缩放因子相等，且两两夹角均为 120°，从而呈现出独特的立体感
-	void D2D_STEP06_CalcIsometricMatrixAndTransform()
+	void D2D_STEP07_CalcIsometricMatrixAndTransform()
 	{
 		// 先绕 y 轴旋转 45°，XM_PIDIV4 = 45°，让正面和后面可见
 		XMMATRIX RotateY_Matrix = XMMatrixRotationY(XM_PIDIV4);
@@ -870,7 +854,7 @@ public:
 
 
 	// 对每个方块物品的顶点数据进行等轴变换，并绘制相应面的 D2D 位图，生成预渲染立体图标
-	void D2D_STEP07_GenerateBlockItemIcons()
+	void D2D_STEP08_GenerateBlockItemIcons()
 	{
 		// m_InventoryBlockIcons 重置大小为 9，等会要进行位图创建
 		m_InventoryBlockIcons.resize(BlockBitmap_IndexGroup.size());
@@ -1181,6 +1165,7 @@ public:
 	// ---------------------------------------------------------------------------------------------------------------
 
 
+
 	// 获取 Selected_Slot_Index
 	inline UINT Get_Selected_Slot_Index()
 	{
@@ -1451,23 +1436,6 @@ private:
 	DXGI_FORMAT DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;	// DSV 资源的格式
 
 
-
-	ComPtr<ID3D12Resource> m_CBVResource;		// 常量缓冲资源，用于存放每帧都要更新/逐实例共用的数据
-	struct CBuffer								// 常量缓冲结构体
-	{
-		// MVP 矩阵，用于将顶点数据从顶点空间变换到齐次裁剪空间
-		XMFLOAT4X4 MVPMatrix;
-		// 方块朝向 (0-5 分别对应 右左前后上下，6-8 用于特殊方块)，存储的旋转到对应朝向的旋转矩阵
-		XMFLOAT4X4 BlockFaceForwardMatrix[9];
-		// 方块破坏阶段使用纹理的索引
-		UINT DestroyStage;
-	};
-	CBuffer* m_ConstantBuffer = nullptr;		// 常量缓冲结构体指针，下文 Map 后指针会指向 CBVResource 的地址
-
-	Camera m_FirstCamera;						// 第一人称摄像机
-
-
-
 	// 视口
 	D3D12_VIEWPORT ViewPort = D3D12_VIEWPORT{ 0, 0, float(WindowWidth), float(WindowHeight), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
 	// 裁剪矩形
@@ -1479,64 +1447,42 @@ private:
 
 
 
-	// D2D 引擎对象，用于渲染 2D UI 界面
+	// D2D 引擎对象
 	D2DEngine m_D2DEngine;
 
 
 	// 纹理资源名 (路径) 组，存储需要加载的 3D 渲染纹理名称 (相对路径)
 	std::vector<std::wstring> TextureNames =
 	{
-		L"resource/bedrock.png",						// 0.基岩
-		L"resource/cobblestone.png",					// 1.原石
-		L"resource/emerald_block.png",					// 2.绿宝石块
-		L"resource/furnace_front_off.png",				// 3.熔炉正面
-		L"resource/furnace_side.png",					// 4.熔炉侧面
-		L"resource/furnace_top.png",					// 5.熔炉顶面
-		L"resource/gold_ore.png",						// 6.金矿
-		L"resource/gold_block.png",						// 7.金块
-		L"resource/noteblock.png",						// 8.音符盒
-		L"resource/piston_bottom.png",					// 9.活塞底面
-		L"resource/piston_side.png",					// 10.活塞侧面
-		L"resource/piston_top_normal.png",				// 11.活塞顶面
-		L"resource/redstone_block.png",					// 12.红石块
-		L"resource/redstone_lamp_on.png",				// 13.红石灯激活状态
-		L"resource/tnt_bottom.png",						// 14.TNT底面
-		L"resource/tnt_side.png",						// 15.TNT侧面
-		L"resource/tnt_top.png",						// 16.TNT顶面
-		L"resource/diamond_ore.png",					// 17.钻石原矿
-		L"resource/bookshelf.png",						// 18.书架
-		L"resource/command_block.png",					// 19.命令方块
-		L"resource/crafting_table_front.png",			// 20.工作台正面
-		L"resource/crafting_table_side.png",			// 21.工作台侧面
-		L"resource/crafting_table_top.png",				// 22.工作台顶面
-		L"resource/dispenser_front_horizontal.png",		// 23.水平发射器正面
-		L"resource/dispenser_front_vertical.png",		// 24.垂直发射器顶面
-		L"resource/dropper_front_horizontal.png",		// 25.水平投掷器正面
-		L"resource/dropper_front_vertical.png",			// 26.垂直投掷器顶面
-		L"resource/emerald_ore.png",					// 27.绿宝石原矿
-		L"resource/stone_diorite_smooth.png",			// 28.磨制闪长岩
-		L"resource/glowstone.png",						// 29.萤石
-		L"resource/iron_ore.png",						// 30.铁矿
-		L"resource/log_oak.png",						// 31.橡木原木侧面
-		L"resource/log_oak_top.png",					// 32.橡木原木顶面
-		L"resource/planks_oak.png",						// 33.橡木木板
-		L"resource/sand.png",							// 34.沙子
-		L"resource/stonebrick.png",						// 35.石砖
-		L"resource/stone_slab_top.png",					// 36.平滑石
-		L"resource/quartz_block_bottom.png",			// 37.石英块底面
-		L"resource/quartz_block_side.png",				// 38.石英块侧面
-		L"resource/quartz_block_top.png",				// 39.石英块顶面
-
-		L"resource/destroy_stage_0.png",				// 40.破坏阶段 (0)
-		L"resource/destroy_stage_1.png",				// 41.破坏阶段 (1)
-		L"resource/destroy_stage_2.png",				// 42.破坏阶段 (2)
-		L"resource/destroy_stage_3.png",				// 43.破坏阶段 (3)
-		L"resource/destroy_stage_4.png",				// 44.破坏阶段 (4)
-		L"resource/destroy_stage_5.png",				// 45.破坏阶段 (5)
-		L"resource/destroy_stage_6.png",				// 46.破坏阶段 (6)
-		L"resource/destroy_stage_7.png",				// 47.破坏阶段 (7)
-		L"resource/destroy_stage_8.png",				// 48.破坏阶段 (8)
-		L"resource/destroy_stage_9.png"					// 49.破坏阶段 (9)
+		L"resource/bedrock.png",				// 0.基岩
+		L"resource/furnace_front_off.png",		// 1.熔炉正面
+		L"resource/furnace_side.png",			// 2.熔炉侧面
+		L"resource/furnace_top.png",			// 3.熔炉顶面
+		L"resource/crafting_table_front.png",	// 4.工作台正面
+		L"resource/crafting_table_side.png",	// 5.工作台侧面
+		L"resource/crafting_table_top.png",		// 6.工作台顶面
+		L"resource/tnt_side.png",				// 7.TNT 正面
+		L"resource/tnt_top.png",				// 8.TNT 顶面
+		L"resource/tnt_bottom.png",				// 9.TNT 底面
+		L"resource/log_oak.png",				// 10.橡木原木侧面
+		L"resource/log_oak_top.png",			// 11.橡木原木顶面
+		L"resource/planks_oak.png",				// 12.橡木木板
+		L"resource/bookshelf.png",				// 13.书架
+		L"resource/dirt.png",					// 14.泥土
+		L"resource/grass_top.png",				// 15.草方块顶部
+		L"resource/grass_side.png",				// 16.草方块侧面
+		L"resource/glowstone.png",				// 17.萤石
+		
+		L"resource/destroy_stage_0.png",		// 18.破坏阶段 (0)
+		L"resource/destroy_stage_1.png",		// 19.破坏阶段 (1)
+		L"resource/destroy_stage_2.png",		// 20.破坏阶段 (2)
+		L"resource/destroy_stage_3.png",		// 21.破坏阶段 (3)
+		L"resource/destroy_stage_4.png",		// 22.破坏阶段 (4)
+		L"resource/destroy_stage_5.png",		// 23.破坏阶段 (5)
+		L"resource/destroy_stage_6.png",		// 24.破坏阶段 (6)
+		L"resource/destroy_stage_7.png",		// 25.破坏阶段 (7)
+		L"resource/destroy_stage_8.png",		// 26.破坏阶段 (8)
+		L"resource/destroy_stage_9.png"			// 27.破坏阶段 (9)
 	};
 
 
@@ -1553,10 +1499,11 @@ private:
 	// 纹理数组所有纹理的 DXGI 格式
 	DXGI_FORMAT TextureFormat = DXGI_FORMAT_UNKNOWN;
 
-	// Texture Array 纹理数组默认堆资源
-	ComPtr<ID3D12Resource> m_TextureArrayDefaultResource;
-	// GPU Texture Array 的上传堆资源，用于中转
-	ComPtr<ID3D12Resource> m_TextureArrayUploadResource;
+	// 用于 全遮挡完整方块 + 破坏纹理 的纹理数组默认堆资源
+	// Texture2DArray m_TextureArray : register(t1, space0);
+	ComPtr<ID3D12Resource> m_SRVTextureArray_DefaultResource;
+	// 用于 全遮挡完整方块 + 破坏纹理 的纹理数组上传堆资源，用于中转
+	ComPtr<ID3D12Resource> m_SRVTextureArray_UploadResource;
 
 
 	UINT BitsPerPixel = 0;				// 纹理数组所有纹理的图像深度 (单位：比特)
@@ -1576,9 +1523,12 @@ private:
 	D3D12_HEAP_PROPERTIES DefaultHeapDesc = { D3D12_HEAP_TYPE_DEFAULT };	// 默认堆属性结构体
 
 
-	ComPtr<ID3D12DescriptorHeap> m_SRVHeap;					// SRV 描述符堆
-	D3D12_CPU_DESCRIPTOR_HANDLE SRVTextureArray_CPUHandle;	// 纹理数组的 CPU 句柄，用于 CPU 端创建 SRV 描述符
-	D3D12_GPU_DESCRIPTOR_HANDLE SRVTextureArray_GPUHandle;	// 纹理数组的 GPU 句柄，用于 GPU 端着色器引用资源
+	// 用于渲染 纹理数组 和 粒子缓冲区 的 SRV 描述符堆 (2 SRV)
+	ComPtr<ID3D12DescriptorHeap> m_RenderSRVHeap;
+	// 纹理数组的 SRV 描述符 CPU 句柄
+	D3D12_CPU_DESCRIPTOR_HANDLE SRVTextureArray_CPUHandle;
+	// 纹理数组的 SRV 描述符 GPU 句柄
+	D3D12_GPU_DESCRIPTOR_HANDLE SRVTextureArray_GPUHandle;
 
 
 
@@ -1595,6 +1545,7 @@ private:
 		UINT FaceTexture_InArrayIndex[6];
 	};
 
+
 	// 方块类型-纹理索引组，每个 vector 索引表示不同的方块类型，每个 vector 元素值表示对应方块六个面的纹理数据索引数据
 	// 在 shader 会根据 逐实例数据 (方块类型) 和 逐顶点数据 (方块每个面对应的纹理索引) 来索引对应的纹理，这样就不用反复换绑 SRV 了
 	std::vector<CUBEFACE> BlockCubeTexture_IndexGroup =
@@ -1602,42 +1553,23 @@ private:
 		// 一个完整方块有六个面，右面 (+X)，左面 (-X)，前面 (+Z)，后面 (-Z)，上面 (+Y)，下面 (-Y)，我们以右面是方块正面为准
 
 		{0, 0, 0, 0, 0, 0},			// 0.基岩
-		{1, 1, 1, 1, 1, 1},			// 1.圆石
-		{2, 2, 2, 2, 2, 2},			// 2.绿宝石块
-		{3, 4, 4, 4, 5, 5},			// 3.熔炉 (三个面)
-		{6, 6, 6, 6, 6, 6},			// 4.金矿
-		{7, 7, 7, 7, 7, 7},			// 5.金块
-		{8, 8, 8, 8, 8, 8},			// 6.音符盒
-		{10, 10, 10, 10, 11, 9},	// 7.活塞 (三个面)
-		{12, 12, 12, 12, 12, 12},	// 8.红石块
-		{13, 13, 13, 13, 13, 13},	// 9.激活状态的红石灯
-		{15, 15, 15, 15, 16, 14},	// 10.TNT (三个面)
-		{17, 17, 17, 17, 17, 17},	// 11.钻石原矿
-		{18, 18, 18, 18, 33, 33},	// 12.书架 (两个面)
-		{19, 19, 19, 19, 19, 19},	// 13.命令方块
-		{20, 20, 21, 21, 22, 22},	// 14.工作台 (三个面)
-		{23, 9, 9, 9, 9, 9},		// 15.水平发射器 (三个面)
-		{9, 9, 9, 9, 24, 9},		// 16.垂直发射器 (三个面)
-		{25, 9, 9, 9, 9, 9},		// 17.水平投掷器 (三个面)
-		{9, 9, 9, 9, 26, 9},		// 18.垂直投掷器 (三个面)
-		{27, 27, 27, 27, 27, 27},	// 19.绿宝石原矿
-		{28, 28, 28, 28, 28, 28},	// 20.磨制闪长岩
-		{29, 29, 29, 29, 29, 29},	// 21.萤石
-		{30, 30, 30, 30, 30, 30},	// 22.铁矿
-		{31, 31, 31, 31, 32, 32},	// 23.橡木原木 (两个面)
-		{31, 31, 31, 31, 31, 31},	// 24.橡树木
-		{33, 33, 33, 33, 33, 33},	// 25.橡木木板
-		{34, 34, 34, 34, 34, 34},	// 26.沙子
-		{35, 35, 35, 35, 35, 35},	// 27.石砖
-		{36, 36, 36, 36, 36, 36},	// 28.平滑石
-		{38, 38, 38, 38, 39, 37}	// 29.石英块 (三个面)
+		{1, 2, 2, 2, 3, 3},			// 1.熔炉
+		{4, 4, 5, 5, 6, 6},			// 2.工作台
+		{7, 7, 7, 7, 8, 9},			// 3.TNT
+		{10, 10, 10, 10, 11, 11},	// 4.橡木原木
+		{12, 12, 12, 12, 12, 12},	// 5.橡木木板
+		{13, 13, 13, 13, 12, 12},	// 6.书架
+		{14, 14, 14, 14, 14, 14},	// 7.泥土
+		{16, 16, 16, 16, 15, 14},	// 8.草方块
+		{17, 17, 17, 17, 17, 17}	// 9.萤石
 	};
 
 
 	// SRV Structured Buffer 的上传堆资源
-	ComPtr<ID3D12Resource> m_StructuredBufferUploadResource;
+	ComPtr<ID3D12Resource> m_StructuredBuffer_UploadResource;
 	// SRV Structured Buffer 的默认堆资源
-	ComPtr<ID3D12Resource> m_StructuredBufferDefaultResource;
+	// StructuredBuffer<CUBEFACE> BlockCubeTexture_IndexGroup : register(t0, space0);
+	ComPtr<ID3D12Resource> m_StructuredBuffer_DefaultResource;
 
 
 
@@ -1645,11 +1577,135 @@ private:
 
 
 
-	ComPtr<ID3D12RootSignature> m_RootSignature;		// 根签名
-	ComPtr<ID3D12PipelineState> m_RenderBlockPSO;		// 用于渲染方块的 PSO
+	// 粒子实例
+	struct Particle
+	{
+		XMFLOAT3 Position;		// 粒子的世界坐标
+		XMFLOAT3 Velocity;		// 粒子的速度
+		float Life;				// 剩余生命 (单位：秒)，大于 0 表示存活
+		UINT BlockType;			// 所属方块类型
+	};
 
-	// 用于渲染破坏纹理的 PSO
-	// 根签名、输入布局与上文的 m_RenderBlockPSO 共用，shader、深度缓冲状态、光栅化深度状态不共用
+
+	// 管理所有粒子的粒子缓冲区默认堆资源
+	// RWStructuredBuffer<Particle> m_ParticlesBuffer : register(u0, space0);
+	// StructuredBuffer<Particle> m_ParticlesBuffer : register(t2, space0);
+	ComPtr<ID3D12Resource> m_UAVParticlesBuffer_DefaultResource;
+
+	// 记录 "空泡"(数据空位) 的空闲栈 (数组栈) 默认堆资源
+	// RWStructuredBuffer<uint> m_IdleParticlesStack : register(u1, space0);
+	ComPtr<ID3D12Resource> m_UAVIdleParticlesStack_DefaultResource;
+
+	// 记录空闲栈最近可用 "空泡" 索引的栈顶指针默认堆资源
+	// RWByteAddressBuffer m_StackTopPointer : register(u2, space0);
+	ComPtr<ID3D12Resource> m_UAVStackTopPointer_DefaultResource;
+	// 栈顶指针的回读堆资源，用于 CPU 实时回读活跃粒子数
+	ComPtr<ID3D12Resource> m_UAVStackTopPointer_ReadbackResource;
+
+	// 粒子待生成列表上传堆资源，用于 CPU 持续向计算着色器输入粒子实例数据
+	// StructuredBuffer<Particle> m_SpawnParticlesList : register(t0, space0);
+	ComPtr<ID3D12Resource> m_SRVSpawnParticlesList_UploadResource;
+
+
+	// 待生成列表中，每帧新粒子的总数量
+	// cbuffer SpawnParticlesData : register(b0, space0);
+	UINT SpawnParticlesCount = 0;
+
+
+	// cbuffer UpdateParticlesData : register(b1, space0)
+	// 相比上一帧，当前帧过去的时间，用于计算速度与位移
+	float PerFrameDataTime;
+	// 粒子的重力数据
+	const float GravityData = 0.1f;
+	// 粒子缓冲可以存储 128 个粒子
+	const UINT MaxAllocParticlesNums = 128;
+
+
+	D3D12_HEAP_PROPERTIES ReadbackHeapDesc = { D3D12_HEAP_TYPE_READBACK };	// 回读堆属性结构体
+
+	// 指向 m_UAVStackTopPointer_ReadbackResource 的回读堆数据指针，用于回读当前活跃粒子数
+	UINT* m_StackTop_ReadbackPointer = nullptr;
+
+	// 当前活跃粒子数
+	UINT CurrentActiveParticlesNums = 0;
+
+	// 指向 m_SRVSpawnParticlesList_UploadResource 的上传堆数据指针，表示准备要上传到计算着色器的目标缓冲地址
+	BYTE* m_ReadySpawnParticlesListPointer = nullptr;
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// CBV/SRV/UAV 描述符的大小
+	UINT CBVSRVUAVDescriptorSize = 0;
+
+	// 用于两个计算着色器的描述符堆 (3 UAV + 1 SRV)
+	ComPtr<ID3D12DescriptorHeap> m_ComputeUAVSRVHeap;
+	// m_ComputeUAVSRVHeap 的起始偏移 CPU 句柄，用于创建描述符
+	D3D12_CPU_DESCRIPTOR_HANDLE ComputeUAVSRVHeap_CPUBaseHandle;
+	// m_ComputeUAVSRVHeap 的起始偏移 GPU 句柄，用于快速绑定描述符到渲染管线
+	D3D12_GPU_DESCRIPTOR_HANDLE ComputeUAVSRVHeap_GPUBaseHandle;
+
+	// m_ParticlesBuffer 粒子缓冲区在 m_SRVHeap 的 SRV 描述符 CPU 句柄
+	D3D12_CPU_DESCRIPTOR_HANDLE SRVParticlesBuffer_CPUHandle;
+	// m_ParticlesBuffer 粒子缓冲区在 m_SRVHeap 的 SRV 描述符 GPU 句柄
+	D3D12_GPU_DESCRIPTOR_HANDLE SRVParticlesBuffer_GPUHandle;
+
+
+	// 用于两个计算着色器的根签名
+	ComPtr<ID3D12RootSignature> m_ComputeParticleRootSignature;
+	// 用于 SpawnCSMain 添加并生成新粒子的 PSO
+	ComPtr<ID3D12PipelineState> m_ComputeSpawnParticlePSO;
+	// 用于 UpdateCSMain 更新并管理粒子的 PSO
+	ComPtr<ID3D12PipelineState> m_ComputeUpdateParticlePSO;
+
+	
+	// 将 m_ParticlesBuffer 从 UNORDERED_ACCESS -> NON_PIXEL_SHADER_RESOURCE 的资源屏障
+	D3D12_RESOURCE_BARRIER UAVToSRV_barrier;
+	// 将 m_ParticlesBuffer 从 NON_PIXEL_SHADER_RESOURCE -> UNORDERED_ACCESS 的资源屏障
+	D3D12_RESOURCE_BARRIER SRVToUAV_barrier;
+	// 将 m_StackTopPointer 从 UNORDERED_ACCESS -> COPY_SOURCE 的资源屏障
+	D3D12_RESOURCE_BARRIER UAVToCopySource_barrier;
+	// 将 m_StackTopPointer 从 COPY_SOURCE -> UNORDERED_ACCESS 的资源屏障
+	D3D12_RESOURCE_BARRIER CopySourceToUAV_barrier;
+	// 用于 Render 两个使用计算着色器进行 Dispatch 调度线程，进行三个 UAV 资源同步的 UAV 资源屏障
+	D3D12_RESOURCE_BARRIER UAVDispatch_barrier[3];
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	ComPtr<ID3D12Resource> m_CBVResource;		// 常量缓冲资源，用于存放每帧都要更新/逐实例共用的数据
+	struct CBuffer								// 常量缓冲结构体
+	{
+		// MVP 矩阵，用于将顶点数据从顶点空间变换到齐次裁剪空间
+		XMFLOAT4X4 MVPMatrix;
+		// 方块朝向 (0-5 分别对应 右左前后上下，6-8 用于特殊方块)，存储的旋转到对应朝向的旋转矩阵
+		XMFLOAT4X4 BlockFaceForwardMatrix[9];
+		// 方块破坏阶段使用纹理的索引
+		UINT DestroyStage;
+	};
+	CBuffer* m_ConstantBuffer = nullptr;		// 常量缓冲结构体指针，下文 Map 后指针会指向 CBVResource 的地址
+
+	Camera m_FirstCamera;						// 第一人称摄像机
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 渲染方块，粒子，破坏纹理使用的根签名
+	ComPtr<ID3D12RootSignature> m_RenderRootSignature;
+	// 渲染方块的 PSO
+	ComPtr<ID3D12PipelineState> m_RenderBlockPSO;
+	// 渲染粒子的 PSO
+	ComPtr<ID3D12PipelineState> m_RenderParticlePSO;
+	// 渲染破坏纹理的 PSO
 	ComPtr<ID3D12PipelineState> m_DestroyStagePSO;
 
 
@@ -1672,47 +1728,47 @@ private:
 		UINT FaceIndex;			// 顶点所属的立方体面索引
 	};
 
-	// 每个方块实例共用的顶点数据 (逐顶点流)，这一回我们吸取第 7-8 章的经验，将方块中心放在模型空间中心 (0, 0, 0)，注意绕序！
+	// 每个方块实例共用的顶点数据 (逐顶点流)
 	std::vector<VERTEX> PreBlockVertexData =
 	{
 		// 一个完整方块有六个面，右面 (+X)，左面 (-X)，前面 (+Z)，后面 (-Z)，上面 (+Y)，下面 (-Y)，我们以右面是方块正面为准
 		// 顺序遵循 左上角 -> 右上角 -> 右下角 -> 左下角
 
 		// 右面 (+X, FaceIndex = 0)
-		{ XMFLOAT4(1, 1, -1, 1), XMFLOAT2(0, 0), 0 },
-		{ XMFLOAT4(1, 1, 1, 1), XMFLOAT2(1, 0), 0 },
-		{ XMFLOAT4(1, -1, 1, 1), XMFLOAT2(1, 1), 0 },
-		{ XMFLOAT4(1, -1, -1, 1), XMFLOAT2(0, 1), 0 },
+		{ XMFLOAT4(0.5, 0.5, -0.5, 0.5), XMFLOAT2(0, 0), 0 },
+		{ XMFLOAT4(0.5, 0.5, 0.5, 0.5), XMFLOAT2(1, 0), 0 },
+		{ XMFLOAT4(0.5, -0.5, 0.5, 0.5), XMFLOAT2(1, 1), 0 },
+		{ XMFLOAT4(0.5, -0.5, -0.5, 0.5), XMFLOAT2(0, 1), 0 },
 
-		// 左面 (-X, FaceIndex = 1)
-		{ XMFLOAT4(-1, 1, 1, 1), XMFLOAT2(0, 0), 1 },
-		{ XMFLOAT4(-1, 1, -1, 1), XMFLOAT2(1, 0), 1 },
-		{ XMFLOAT4(-1, -1, -1, 1), XMFLOAT2(1, 1), 1 },
-		{ XMFLOAT4(-1, -1, 1, 1), XMFLOAT2(0, 1), 1 },
+		// 左面 (-X, FaceIndex = 0.5)
+		{ XMFLOAT4(-0.5, 0.5, 0.5, 0.5), XMFLOAT2(0, 0), 1 },
+		{ XMFLOAT4(-0.5, 0.5, -0.5, 0.5), XMFLOAT2(1, 0), 1 },
+		{ XMFLOAT4(-0.5, -0.5, -0.5, 0.5), XMFLOAT2(1, 1), 1 },
+		{ XMFLOAT4(-0.5, -0.5, 0.5, 0.5), XMFLOAT2(0, 1), 1 },
 
 		// 前面 (+Z, FaceIndex = 2)
-		{ XMFLOAT4(1, 1, 1, 1), XMFLOAT2(0, 0), 2 },
-		{ XMFLOAT4(-1, 1, 1, 1), XMFLOAT2(1, 0), 2 },
-		{ XMFLOAT4(-1, -1, 1, 1), XMFLOAT2(1, 1), 2 },
-		{ XMFLOAT4(1, -1, 1, 1), XMFLOAT2(0, 1), 2 },
+		{ XMFLOAT4(0.5, 0.5, 0.5, 0.5), XMFLOAT2(0, 0), 2 },
+		{ XMFLOAT4(-0.5, 0.5, 0.5, 0.5), XMFLOAT2(1, 0), 2 },
+		{ XMFLOAT4(-0.5, -0.5, 0.5, 0.5), XMFLOAT2(1, 1), 2 },
+		{ XMFLOAT4(0.5, -0.5, 0.5, 0.5), XMFLOAT2(0, 1), 2 },
 
 		// 后面 (-Z, FaceIndex = 3)
-		{ XMFLOAT4(-1, 1, -1, 1), XMFLOAT2(0, 0), 3 },
-		{ XMFLOAT4(1, 1, -1, 1), XMFLOAT2(1, 0), 3 },
-		{ XMFLOAT4(1, -1, -1, 1), XMFLOAT2(1, 1), 3 },
-		{ XMFLOAT4(-1, -1, -1, 1), XMFLOAT2(0, 1), 3 },
+		{ XMFLOAT4(-0.5, 0.5, -0.5, 0.5), XMFLOAT2(0, 0), 3 },
+		{ XMFLOAT4(0.5, 0.5, -0.5, 0.5), XMFLOAT2(1, 0), 3 },
+		{ XMFLOAT4(0.5, -0.5, -0.5, 0.5), XMFLOAT2(1, 1), 3 },
+		{ XMFLOAT4(-0.5, -0.5, -0.5, 0.5), XMFLOAT2(0, 1), 3 },
 
 		// 上面 (+Y, FaceIndex = 4)
-		{ XMFLOAT4(-1, 1, -1, 1), XMFLOAT2(0, 0), 4 },
-		{ XMFLOAT4(-1, 1, 1, 1), XMFLOAT2(1, 0), 4 },
-		{ XMFLOAT4(1, 1, 1, 1), XMFLOAT2(1, 1), 4 },
-		{ XMFLOAT4(1, 1, -1, 1), XMFLOAT2(0, 1), 4 },
+		{ XMFLOAT4(-0.5, 0.5, -0.5, 0.5), XMFLOAT2(0, 0), 4 },
+		{ XMFLOAT4(-0.5, 0.5, 0.5, 0.5), XMFLOAT2(1, 0), 4 },
+		{ XMFLOAT4(0.5, 0.5, 0.5, 0.5), XMFLOAT2(1, 1), 4 },
+		{ XMFLOAT4(0.5, 0.5, -0.5, 0.5), XMFLOAT2(0, 1), 4 },
 
 		// 下面 (-Y, FaceIndex = 5)
-		{ XMFLOAT4(1, -1, -1, 1), XMFLOAT2(0, 0), 5 },
-		{ XMFLOAT4(1, -1, 1, 1), XMFLOAT2(1, 0), 5 },
-		{ XMFLOAT4(-1, -1, 1, 1), XMFLOAT2(1, 1), 5 },
-		{ XMFLOAT4(-1, -1, -1, 1), XMFLOAT2(0, 1), 5 }
+		{ XMFLOAT4(0.5, -0.5, -0.5, 0.5), XMFLOAT2(0, 0), 5 },
+		{ XMFLOAT4(0.5, -0.5, 0.5, 0.5), XMFLOAT2(1, 0), 5 },
+		{ XMFLOAT4(-0.5, -0.5, 0.5, 0.5), XMFLOAT2(1, 1), 5 },
+		{ XMFLOAT4(-0.5, -0.5, -0.5, 0.5), XMFLOAT2(0, 1), 5 }
 	};
 
 	// 每个方块实例共用的索引数据
@@ -1749,8 +1805,9 @@ private:
 	ComPtr<ID3D12Resource> m_BlockVertexResource;
 	// 上传堆索引资源
 	ComPtr<ID3D12Resource> m_BlockIndexResource;
-	// 上传堆实例资源 (这个是动态资源，总大小固定，但是里面的数据是动态的，数量可以变化)
+	// 上传堆实例资源
 	ComPtr<ID3D12Resource> m_BlockInstanceResource;
+
 
 	// 上传堆实例资源分配的总大小 (最多能放多少个实例，我们这里设置最多能放 10000 个方块)
 	const size_t MaxInstanceResourceAllocSize = 10000 * sizeof(BLOCKINSTANCE);
@@ -1759,21 +1816,34 @@ private:
 	BYTE* m_BlockInstanceMapPointer = nullptr;
 
 
+	// 随机数设备
+	std::random_device RandomDevice;
+	// 32 位随机数梅森旋转种子
+	std::mt19937 RandomSeed = std::mt19937(RandomDevice());
+
+
 
 	// ---------------------------------------------------------------------------------------------------------------
 
 
 
-	// 起始破坏时间刻
-	UINT64 BeginDestroyRecordedTick = 0;
-	// 当前破坏时间刻
-	UINT64 CurrentDestroyTick = 0;
+	// 高分辨率计时器的频率
+	LARGE_INTEGER CounterFrequency = {};
+	// 起始破坏时间刻，用于计算方块破坏时间
+	LARGE_INTEGER BeginDestroyRecordedTick = {};
+	// 当前破坏时间刻，用于计算方块破坏时间
+	LARGE_INTEGER CurrentDestroyTick = {};
+	// 上一帧记录的时间刻，用于计算粒子
+	LARGE_INTEGER LastFrameTick = {};
+	// 当前帧的时间刻，用于计算粒子
+	LARGE_INTEGER CurrentFrameTick = {};
 
 	// 当前破坏阶段纹理索引 (-1 表示无方块破坏)
 	UINT DestroyStageIndex = -1;
 
 	// 要破坏方块实例的索引 (-1 表示无方块破坏)
 	UINT DestroyInstanceIndex = -1;
+
 
 	// 判断数据是否被更新的脏数据标志，如果为真就触发下面 UpdateConstantBuffer 的数据全量更新
 	bool isDirtyData = true;
@@ -1789,16 +1859,19 @@ private:
 
 	// 物品快捷栏方块类型在结构化缓冲的索引，如果有一种数据结构可以很方便记录索引，还能动态扩容/绑定就好了...
 	const std::vector<UINT> InventoryBlockTypeGroup = {
-		3,	// 0.熔炉
-		14,	// 1.工作台
-		10,	// 2.TNT
-		7,	// 3.活塞 (在下文需要特殊处理)
-		29,	// 4.石英块 (在下文需要特殊处理)
-		15,	// 5.水平发射器 (在下文需要特殊处理)
-		12,	// 6.书架
-		11,	// 7.钻石原矿
-		21	// 8.萤石
+		1,	// 0.熔炉
+		2,	// 1.工作台
+		3,	// 2.TNT
+		4,	// 3.橡木原木
+		5,	// 4.橡木木板
+		6,	// 5.书架
+		7,	// 6.泥土
+		8,	// 7.草方块
+		9	// 8.萤石
 	};
+
+	// CPU 端新粒子待生成列表，预分配 128 个粒子的内存
+	std::vector<Particle> SpawnParticleList = std::vector<Particle>(MaxAllocParticlesNums);
 
 
 
@@ -2090,42 +2163,13 @@ public:
 	}
 
 
-	// 创建 Constant Buffer Resource 常量缓冲资源
-	void STEP11_CreateCBVResource()
-	{
-		// 常量资源宽度，这里填整个结构体的大小。注意！硬件要求，常量缓冲需要 256 字节对齐！所以这里要进行 Ceil 向上取整，进行内存对齐！
-		// D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT = 256
-		UINT CBufferWidth = Ceil(sizeof(CBuffer), 256) * 256;
-
-		D3D12_RESOURCE_DESC CBVResourceDesc = {};						// 常量缓冲资源信息结构体
-		CBVResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;	// 上传堆资源都是缓冲
-		CBVResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;		// 上传堆资源都是按行存储数据的 (一维线性存储)
-		CBVResourceDesc.Width = CBufferWidth;							// 常量缓冲区资源宽度 (要分配显存的总大小)
-		CBVResourceDesc.Height = 1;										// 上传堆资源都是存储一维线性资源，所以高度必须为 1
-		CBVResourceDesc.Format = DXGI_FORMAT_UNKNOWN;					// 上传堆资源的格式必须为 DXGI_FORMAT_UNKNOWN
-		CBVResourceDesc.DepthOrArraySize = 1;							// 资源深度，这个是用于纹理数组和 3D 纹理的，上传堆资源必须为 1
-		CBVResourceDesc.MipLevels = 1;									// Mipmap 等级，这个是用于纹理的，上传堆资源必须为 1
-		CBVResourceDesc.SampleDesc.Count = 1;							// 资源采样次数，上传堆资源都是填 1
-
-		// 上传堆属性的结构体，上传堆位于 CPU 和 GPU 的共享内存
-		D3D12_HEAP_PROPERTIES UploadHeapDesc = { D3D12_HEAP_TYPE_UPLOAD };
-
-		// 创建常量缓冲资源
-		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE, &CBVResourceDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_CBVResource));
-
-		// 常量缓冲直接 Map 映射到结构体指针就行即可，不需要再 Unmap，小数据下常量缓冲传递效率很高
-		m_CBVResource->Map(0, nullptr, reinterpret_cast<void**>(&m_ConstantBuffer));
-	}
-
-
 
 	// ---------------------------------------------------------------------------------------------------------------
 
 
 
 	// 初始化 D2D 引擎，创建 D3D11On12 相关的设备并进行初始化，执行 D2D 引擎内部的三个必要的成员函数
-	void STEP12_InitializeD2DEngine()
+	void STEP11_InitializeD2DEngine()
 	{
 		m_D2DEngine.D2D_STEP01_CreateD3D11Device(m_D3D12Device, m_CommandQueue);
 		m_D2DEngine.D2D_STEP02_CreateD2DDevice();
@@ -2135,18 +2179,19 @@ public:
 
 	// 在初始化 D2D 引擎的基础上，从外部文件加载位图
 	// 部分用于 UI 并转换到 D2D 位图，部分用于方块纹理并转换到 DX12 可用的 WIC 位图
-	void STEP13_LoadImageAndTransform()
+	void STEP12_LoadImageAndTransform()
 	{
-		m_D2DEngine.D2D_STEP04_LoadUIAtlasIntoD2DBitmaps();
-		m_D2DEngine.D2D_STEP05_LoadTextureIntoWICBitmaps(TextureNames, m_TextureGroup);
+		m_D2DEngine.D2D_STEP04_InitializeWICFactory();
+		m_D2DEngine.D2D_STEP05_LoadUIAtlasIntoD2DBitmaps();
+		m_D2DEngine.D2D_STEP06_LoadTextureIntoWICBitmaps(TextureNames, m_TextureGroup);
 	}
 
 
 	// D2D 引擎创建物品栏方块的预渲染图，准备物品栏方块物品的渲染
-	void STEP14_LoadAndGenerateBlockIcons()
+	void STEP13_LoadAndGenerateBlockIcons()
 	{
-		m_D2DEngine.D2D_STEP06_CalcIsometricMatrixAndTransform();
-		m_D2DEngine.D2D_STEP07_GenerateBlockItemIcons();
+		m_D2DEngine.D2D_STEP07_CalcIsometricMatrixAndTransform();
+		m_D2DEngine.D2D_STEP08_GenerateBlockItemIcons();
 	}
 
 
@@ -2156,7 +2201,7 @@ public:
 
 
 	// 获取纹理数组的各种属性，以第一个元素为准，后面的元素这些属性是一样的 (作者检查过了)
-	void STEP15_GetTextureArrayElementsProperties()
+	void STEP14_GetTextureArrayElementsProperties()
 	{
 		// 获取第一个纹理的 DXGI 格式
 		WICPixelFormatGUID WICPixelFormat = {};
@@ -2193,7 +2238,7 @@ public:
 
 
 	// 创建纹理数组需要的上传堆资源与默认堆资源
-	void STEP16_CreateTextureArrayResource()
+	void STEP15_CreateTextureArrayResource()
 	{
 		// 用于中转纹理的上传堆资源结构体
 		D3D12_RESOURCE_DESC UploadResourceDesc = {};
@@ -2209,7 +2254,7 @@ public:
 
 		// 创建上传堆资源
 		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE, &UploadResourceDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_TextureArrayUploadResource));
+			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_SRVTextureArray_UploadResource));
 
 
 		// 默认堆资源结构体
@@ -2226,12 +2271,12 @@ public:
 
 		// 创建默认堆资源
 		m_D3D12Device->CreateCommittedResource(&DefaultHeapDesc, D3D12_HEAP_FLAG_NONE, &DefaultResourceDesc,
-			D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_TextureArrayDefaultResource));
+			D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_SRVTextureArray_DefaultResource));
 	}
 
 
 	// 将纹理数组资源逐步复制到默认堆资源中
-	void STEP17_CopyTextureArrayToDefaultResource()
+	void STEP16_CopyTextureArrayToDefaultResource()
 	{
 		// 用于暂时存储纹理数据的指针，这里要用 malloc 分配空间
 		BYTE* TextureData = (BYTE*)malloc(TextureSize);
@@ -2240,7 +2285,7 @@ public:
 		BYTE* TransferPointer = nullptr;
 
 		// Map 开始映射，Map 方法会得到上传堆资源的地址 (在共享内存上)，传递给指针，这样我们就能通过 memcpy 操作复制数据了
-		m_TextureArrayUploadResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
+		m_SRVTextureArray_UploadResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
 
 
 		// 循环复制 TextureGroup 每个 WIC 资源到上传堆，然后逐一释放，i 是纹理数组元素索引
@@ -2277,7 +2322,7 @@ public:
 		}
 
 		// Unmap 结束映射，让上传堆处于只读状态
-		m_TextureArrayUploadResource->Unmap(0, nullptr);
+		m_SRVTextureArray_UploadResource->Unmap(0, nullptr);
 		// 释放上文 malloc 分配的空间，后面我们用不到它，做一个干净的程序员
 		free(TextureData);
 
@@ -2288,7 +2333,7 @@ public:
 		// 如果复制纹理数组只用一个脚本，下文 GPU 执行 CopyTextureRegion 会寻址出界，报 Stack Corrupted，调试层不会提示这个信息
 		std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> PlacedFootprints(m_TextureGroup.size());
 
-		D3D12_RESOURCE_DESC DefaultResourceDesc = m_TextureArrayDefaultResource->GetDesc();	// 默认堆资源结构体
+		D3D12_RESOURCE_DESC DefaultResourceDesc = m_SRVTextureArray_DefaultResource->GetDesc();	// 默认堆资源结构体
 
 		// 获取纹理复制脚本，用于下文的纹理复制，注意第三个参数！第三个参数是目标资源的子资源数量！我们复制的是纹理数组，要填数组长度！
 		// 当你填了 DefaultResourceDesc 和 TextureGroup.size()，这个函数会自动填充每个资源脚本的各种参数
@@ -2308,12 +2353,12 @@ public:
 			D3D12_TEXTURE_COPY_LOCATION DstLocation = {};						// 复制目标位置 (默认堆资源) 结构体
 			DstLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;		// 纹理复制类型，这里必须指向纹理
 			DstLocation.SubresourceIndex = i;									// 指定要复制的子资源索引 (第 i 个元素)
-			DstLocation.pResource = m_TextureArrayDefaultResource.Get();		// 要复制到的资源 (默认堆资源)
+			DstLocation.pResource = m_SRVTextureArray_DefaultResource.Get();	// 要复制到的资源 (默认堆资源)
 
 			D3D12_TEXTURE_COPY_LOCATION SrcLocation = {};						// 复制源位置 (上传堆资源) 结构体
 			SrcLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;		// 纹理复制类型，这里必须指向缓冲区
 			SrcLocation.PlacedFootprint = PlacedFootprints[i];					// 指定要复制的资源脚本信息 (用第 i 个资源脚本)
-			SrcLocation.pResource = m_TextureArrayUploadResource.Get();			// 被复制数据的缓冲 (上传堆资源)
+			SrcLocation.pResource = m_SRVTextureArray_UploadResource.Get();		// 被复制数据的缓冲 (上传堆资源)
 
 			// 记录复制第 i 个子资源 (纹理数组元素) 到默认堆的命令 (共享内存 -> 显存) 
 			m_CommandList->CopyTextureRegion(&DstLocation, 0, 0, 0, &SrcLocation, nullptr);
@@ -2339,11 +2384,7 @@ public:
 		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
 		// 设置围栏的预定事件，当复制完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
 		// 实际上是将 CPU 端的信号事件句柄，通过围栏值寻址到对应的 Event Slot 事件槽，然后将其绑定
-		// 当 GPU 端的 CommandQueue 的任务执行完成，自身会修改与其相关联所有围栏对象内部的 CompletedValue 任务值
-		// 然后激发相关联的围栏对象，绑定到 CommandQueue 的多个围栏对象 (一个 CommandQueue 可以绑多个围栏，一个围栏可以绑多个围栏值)
-		// 在接收到信号后，围栏会查看自身的 CompletedValue 和对象内部所有的 Event Slot 事件槽
-		// 如果与某个事件槽的 Event Slot 的 FenceValue 对上了 (FenceValue == CompletedValue)，就会将对应事件设置成有信号状态
-		// 然后 GPU Command Queue 继续执行剩下未完成的任务，以此类推。这就是 DX12 CPU 与 GPU 之间的同步与异步
+		// 当 GPU 端的 CommandQueue 的任务执行完成，自身会修改与其相关联所有围栏对象内部的 CompletedValue 任务值，然后激发相关联的围栏对象
 		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
 
 
@@ -2352,21 +2393,21 @@ public:
 	}
 
 
-	// 创建 Shader Resource View/Descriptor Heap 着色器资源描述符堆
-	void STEP18_CreateSRVHeap()
+	// 创建用于 纹理数组 和 粒子缓冲区 的 SRV 着色器资源描述符堆 (2 SRV)
+	void STEP17_CreateSRVHeap()
 	{
 		D3D12_DESCRIPTOR_HEAP_DESC SRVHeapDesc = {};					// SRV 描述符堆信息结构体
-		SRVHeapDesc.NumDescriptors = 1;									// 只有一个 TEXTURE2DARRAY SRV
+		SRVHeapDesc.NumDescriptors = 2;									// 纹理数组 + 粒子缓冲区 SRV
 		SRVHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;		// 类型是 CBV/SRV/UAV 描述符都可以放
 		SRVHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;	// 着色器需要引用 SRV 资源，就必须设置着色器可见标志
 
 		// 创建 SRV 描述符堆
-		m_D3D12Device->CreateDescriptorHeap(&SRVHeapDesc, IID_PPV_ARGS(&m_SRVHeap));
+		m_D3D12Device->CreateDescriptorHeap(&SRVHeapDesc, IID_PPV_ARGS(&m_RenderSRVHeap));
 	}
 
 
-	// 用上文创建的 m_TextureArrayDefaultResource 创建 SRV 描述符，注意我们这里只创建一个 TEXTURE2DARRAY SRV
-	void STEP19_CreateTextureArraySRV()
+	// 用上文创建的 m_TextureArrayDefaultResource 创建第一个 SRV 描述符
+	void STEP18_CreateTextureArraySRV()
 	{
 		// Texture Array 的 SRV 信息结构体，我们要通过 SRV 告知 GPU 这个资源的类型与用法
 		D3D12_SHADER_RESOURCE_VIEW_DESC SRVTextureArrayDesc = {};
@@ -2384,12 +2425,12 @@ public:
 		SRVTextureArrayDesc.Texture2DArray.MipLevels = 1;
 
 		// 获取 CPU 句柄
-		SRVTextureArray_CPUHandle = m_SRVHeap->GetCPUDescriptorHandleForHeapStart();
+		SRVTextureArray_CPUHandle = m_RenderSRVHeap->GetCPUDescriptorHandleForHeapStart();
 		// 获取 GPU 句柄
-		SRVTextureArray_GPUHandle = m_SRVHeap->GetGPUDescriptorHandleForHeapStart();
+		SRVTextureArray_GPUHandle = m_RenderSRVHeap->GetGPUDescriptorHandleForHeapStart();
 
 		// 创建 SRV 描述符
-		m_D3D12Device->CreateShaderResourceView(m_TextureArrayDefaultResource.Get(), &SRVTextureArrayDesc, SRVTextureArray_CPUHandle);
+		m_D3D12Device->CreateShaderResourceView(m_SRVTextureArray_DefaultResource.Get(), &SRVTextureArrayDesc, SRVTextureArray_CPUHandle);
 	}
 
 
@@ -2400,7 +2441,7 @@ public:
 
 	// 创建 SRV Structured Buffer (结构化缓冲区)
 	// 我们这里要传递立方体面纹理索引数据 (静态资源)，所以用 SRV Structured Buffer
-	void STEP20_CreateStructuredBufferResource()
+	void STEP19_CreateStructuredBufferResource()
 	{
 		// Structured Buffer 中转资源的上传堆信息结构体，填法和顶点/索引缓冲一样
 		D3D12_RESOURCE_DESC StructuredBufferUploadDesc = {};
@@ -2415,7 +2456,7 @@ public:
 
 		// 创建上传堆资源
 		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE, &StructuredBufferUploadDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_StructuredBufferUploadResource));
+			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_StructuredBuffer_UploadResource));
 
 
 		// Structured Buffer 中转资源的默认堆信息结构体
@@ -2431,26 +2472,26 @@ public:
 
 		// 创建默认堆资源
 		m_D3D12Device->CreateCommittedResource(&DefaultHeapDesc, D3D12_HEAP_FLAG_NONE, &StructuredBufferDefaultDesc,
-			D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_StructuredBufferDefaultResource));
+			D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_StructuredBuffer_DefaultResource));
 	}
 
 
 
 	// 将 SRV Structured Buffer Resource 逐步复制到默认堆资源中，注意 SRV Structured Buffer 不需要 SRVHeap
 	// 和 CBVResource 一样，直接使用 SRV RootDescriptor
-	void STEP21_CopyStructuredBufferToDefaultResource()
+	void STEP20_CopyStructuredBufferToDefaultResource()
 	{
 		// 用于传递资源的指针
 		BYTE* TransferPointer = nullptr;
 
 		// Map 映射，获取上传堆资源的地址并传递到 TransferPointer
-		m_StructuredBufferUploadResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
+		m_StructuredBuffer_UploadResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
 
 		// 直接 memcpy 复制 (CPU 高速缓存 -> 共享内存)
 		memcpy(TransferPointer, &BlockCubeTexture_IndexGroup[0], BlockCubeTexture_IndexGroup.size() * sizeof(CUBEFACE));
 
 		// UnMap 结束映射，下一步就要复制到默认堆
-		m_StructuredBufferUploadResource->Unmap(0, nullptr);
+		m_StructuredBuffer_UploadResource->Unmap(0, nullptr);
 
 
 		// 复制资源需要使用 GPU 的 CopyEngine 复制引擎，所以需要向命令队列发出复制命令
@@ -2459,8 +2500,8 @@ public:
 
 
 		// 发送复制到默认堆的指令，注意这里用的是 CopyBufferRegion 复制缓冲指令，不用填麻烦的结构体，直接填参数上传 (共享内存 -> GPU 显存)
-		m_CommandList->CopyBufferRegion(m_StructuredBufferDefaultResource.Get(), 0,
-			m_StructuredBufferUploadResource.Get(), 0, BlockCubeTexture_IndexGroup.size() * sizeof(CUBEFACE));
+		m_CommandList->CopyBufferRegion(m_StructuredBuffer_DefaultResource.Get(), 0,
+			m_StructuredBuffer_UploadResource.Get(), 0, BlockCubeTexture_IndexGroup.size() * sizeof(CUBEFACE));
 
 
 		// 关闭命令列表
@@ -2481,9 +2522,8 @@ public:
 		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
 
 
-		// 下一个等待就是 RenderLoop 的 MsgWaitForMultipleObjects，不需要用 WaitForSingleObject 了
-		// 这里再用一次 WaitForSingleObject 就会使事件变成无信号 (CreateEvent 第二个参数)
-		// 导致在 MsgWaitForMultipleObjects 那里卡死，永远返回 1，窗口白屏，完全进不去 case 0 渲染函数
+		// 让主线程强制等待复制完成，经过此函数后 RenderEvent 会自动重置到无信号状态
+		WaitForSingleObject(RenderEvent, INFINITE);
 	}
 
 
@@ -2492,66 +2532,832 @@ public:
 
 
 
-	// 创建根签名，根签名声明了着色器 (渲染管线) 所需要的资源
-	void STEP22_CreateRootSignature()
+	// 在 Minecraft 中，玩家走路、破坏方块、TNT 爆炸摧毁方块、下水或钓鱼，岩浆迸射、地狱门等等都会产生粒子
+	// 粒子是一种非常小的对象，可以用非常小的几何体表示 (原版是 2D 小正方体，我们这里用非常小的小方块)
+	// 可以使用粒子呈现更直观的视觉反馈，本章我们会模拟原版游戏中破坏方块产生粒子的效果
+
+
+	// 依次创建 ParticleShader 所需要的资源
+	void STEP21_CreateParticleRequireResources()
 	{
-		// 根参数 + 静态采样器列表
+		// 创建 m_UAVParticlesBuffer_DefaultResource
+		{
+			// 创建 DefaultResource 需要用到的资源信息结构体
+			D3D12_RESOURCE_DESC DefaultResourceDesc = {};
+			DefaultResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			DefaultResourceDesc.Width = MaxAllocParticlesNums * sizeof(Particle);
+			DefaultResourceDesc.Height = 1;
+			DefaultResourceDesc.MipLevels = 1;
+			DefaultResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+			DefaultResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			DefaultResourceDesc.DepthOrArraySize = 1;
+			DefaultResourceDesc.SampleDesc.Count = 1;
+			DefaultResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+
+			// 创建 m_UAVParticlesBuffer_DefaultResource，注意初始状态
+			m_D3D12Device->CreateCommittedResource(&DefaultHeapDesc, D3D12_HEAP_FLAG_NONE,
+				&DefaultResourceDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+				nullptr, IID_PPV_ARGS(&m_UAVParticlesBuffer_DefaultResource));
+		}
+
+		// 创建 m_UAVIdleParticlesStack_DefaultResource
+		{
+			// 创建 DefaultResource 需要用到的资源信息结构体
+			D3D12_RESOURCE_DESC DefaultResourceDesc = {};
+			DefaultResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			DefaultResourceDesc.Width = MaxAllocParticlesNums * sizeof(Particle);
+			DefaultResourceDesc.Height = 1;
+			DefaultResourceDesc.MipLevels = 1;
+			DefaultResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+			DefaultResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			DefaultResourceDesc.DepthOrArraySize = 1;
+			DefaultResourceDesc.SampleDesc.Count = 1;
+			DefaultResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+
+			// 创建 m_UAVIdleParticlesStack_DefaultResource，注意初始状态
+			m_D3D12Device->CreateCommittedResource(&DefaultHeapDesc, D3D12_HEAP_FLAG_NONE,
+				&DefaultResourceDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+				nullptr, IID_PPV_ARGS(&m_UAVIdleParticlesStack_DefaultResource));
+		}
+
+		// 创建 m_UAVStackTopPointer_DefaultResource，它只占 4 字节 (uint)
+		{
+			// 创建 DefaultResource 需要用到的资源信息结构体
+			D3D12_RESOURCE_DESC DefaultResourceDesc = {};
+			DefaultResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			DefaultResourceDesc.Width = 4;
+			DefaultResourceDesc.Height = 1;
+			DefaultResourceDesc.MipLevels = 1;
+			DefaultResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+			DefaultResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			DefaultResourceDesc.DepthOrArraySize = 1;
+			DefaultResourceDesc.SampleDesc.Count = 1;
+			DefaultResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+
+			// 创建 m_UAVStackTopPointer_DefaultResource，注意初始状态
+			m_D3D12Device->CreateCommittedResource(&DefaultHeapDesc, D3D12_HEAP_FLAG_NONE,
+				&DefaultResourceDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+				nullptr, IID_PPV_ARGS(&m_UAVStackTopPointer_DefaultResource));
+		}
+
+		// 创建 m_UAVStackTopPointer_ReadbackResource
+		{
+			// 创建 ReadbackResource 需要用到的资源信息结构体
+			D3D12_RESOURCE_DESC ReadbackResourceDesc = {};
+			ReadbackResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			ReadbackResourceDesc.Width = 4;
+			ReadbackResourceDesc.Height = 1;
+			ReadbackResourceDesc.MipLevels = 1;
+			ReadbackResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+			ReadbackResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			ReadbackResourceDesc.DepthOrArraySize = 1;
+			ReadbackResourceDesc.SampleDesc.Count = 1;
+
+
+			// 创建 m_UAVStackTopPointer_ReadbackResource，注意初始状态
+			m_D3D12Device->CreateCommittedResource(&ReadbackHeapDesc, D3D12_HEAP_FLAG_NONE,
+				&ReadbackResourceDesc, D3D12_RESOURCE_STATE_COPY_DEST,
+				nullptr, IID_PPV_ARGS(&m_UAVStackTopPointer_ReadbackResource));
+		}
+
+		// 创建 m_SRVSpawnParticlesList_UploadResource
+		{
+			// 创建 UploadResource 需要用到的资源信息结构体
+			D3D12_RESOURCE_DESC UploadResourceDesc = {};
+			UploadResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			UploadResourceDesc.Width = MaxAllocParticlesNums * sizeof(Particle);
+			UploadResourceDesc.Height = 1;
+			UploadResourceDesc.MipLevels = 1;
+			UploadResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+			UploadResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			UploadResourceDesc.DepthOrArraySize = 1;
+			UploadResourceDesc.SampleDesc.Count = 1;
+
+
+			// 创建 m_SRVSpawnParticlesList_UploadResource，注意初始状态
+			m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE,
+				&UploadResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+				nullptr, IID_PPV_ARGS(&m_SRVSpawnParticlesList_UploadResource));
+
+
+			// 我们每帧都要上传新粒子数据给计算着色器，进行持续化映射，不用再 Unmap 了
+			m_SRVSpawnParticlesList_UploadResource->Map(0, nullptr,
+				reinterpret_cast<void**>(&m_ReadySpawnParticlesListPointer));
+		}
+	}
+
+
+	// 清空处于显存的 m_ParticlesBuffer 粒子缓冲区，防止未使用的空位干扰后续渲染，引发渲染错误
+	void STEP22_ClearParticlesBuffer()
+	{
+		// 上传堆资源的结构体信息
+		D3D12_RESOURCE_DESC UploadResourceDesc = {};
+		UploadResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		UploadResourceDesc.Width = MaxAllocParticlesNums * sizeof(Particle);
+		UploadResourceDesc.Height = 1;
+		UploadResourceDesc.MipLevels = 1;
+		UploadResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+		UploadResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		UploadResourceDesc.DepthOrArraySize = 1;
+		UploadResourceDesc.SampleDesc.Count = 1;
+
+		// 粒子缓冲区的上传堆临时资源，用于清空粒子缓冲区，防止未使用的空位产生渲染错误
+		ComPtr<ID3D12Resource> _temp_UAVParticlesBuffer_UploadResource;
+
+		// 创建上传堆资源
+		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE,
+			&UploadResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+			nullptr, IID_PPV_ARGS(&_temp_UAVParticlesBuffer_UploadResource));
+
+
+		// 用于传递资源的指针
+		BYTE* TransferPointer = nullptr;
+		// Map 开启映射，传递资源地址到指针
+		_temp_UAVParticlesBuffer_UploadResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
+		// 将 m_ParticlesBuffer 所有元素全部重置为 0，memset 按字节重置到某一个值
+		memset(TransferPointer, 0, MaxAllocParticlesNums * sizeof(Particle));
+		// Unmap 关闭映射
+		_temp_UAVParticlesBuffer_UploadResource->Unmap(0, nullptr);
+
+
+
+		// 复制资源需要使用 GPU 的 CopyEngine 复制引擎，所以需要向命令队列发出复制命令
+		m_CommandAllocator->Reset();								// 先重置命令分配器
+		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);	// 再重置命令列表，复制命令不需要 PSO 状态，所以第二个参数填 nullptr
+
+
+		// 复制之前，需要将 UAV 资源转换到 COPY_DEST 复制目标状态
+		D3D12_RESOURCE_BARRIER UAVToDest_barrier = {};
+		UAVToDest_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		UAVToDest_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		UAVToDest_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+		UAVToDest_barrier.Transition.pResource = m_UAVParticlesBuffer_DefaultResource.Get();
+
+		// 进行屏障转换
+		m_CommandList->ResourceBarrier(1, &UAVToDest_barrier);
+
+
+		// 发送复制到默认堆的指令 (共享内存 -> GPU 显存)
+		m_CommandList->CopyBufferRegion(m_UAVParticlesBuffer_DefaultResource.Get(), 0,
+			_temp_UAVParticlesBuffer_UploadResource.Get(), 0, MaxAllocParticlesNums * sizeof(Particle));
+
+
+		// 复制完成后，需要将 UAV 资源转换回 UNORDERED_ACCESS 无序访问状态
+		D3D12_RESOURCE_BARRIER DestToUAV_barrier = {};
+		DestToUAV_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		DestToUAV_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		DestToUAV_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		DestToUAV_barrier.Transition.pResource = m_UAVParticlesBuffer_DefaultResource.Get();
+
+		// 进行屏障转换
+		m_CommandList->ResourceBarrier(1, &DestToUAV_barrier);
+
+
+		// 关闭命令列表
+		m_CommandList->Close();
+
+		// 用于传递命令用的临时 ID3D12CommandList 数组
+		ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
+
+		// 提交复制命令！GPU 开始复制！
+		m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
+
+
+
+		// 将围栏预定值设定为下一帧，注意复制资源也需要围栏等待，否则会发生资源冲突！
+		FenceValue++;
+		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
+		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
+		// 设置围栏的预定事件，当复制完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
+		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
+
+
+		// 让主线程强制等待复制完成，经过此函数后 RenderEvent 会自动重置到无信号状态
+		WaitForSingleObject(RenderEvent, INFINITE);
+	}
+
+
+	// 初始化 m_IdleParticlesStack 空闲栈，将栈中元素按顺序初始化为 0,1,2,3,4...
+	void STEP23_InitIdleParticlesStack()
+	{
+		// 上传堆资源的结构体信息
+		D3D12_RESOURCE_DESC UploadResourceDesc = {};
+		UploadResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		UploadResourceDesc.Width = MaxAllocParticlesNums * sizeof(Particle);
+		UploadResourceDesc.Height = 1;
+		UploadResourceDesc.MipLevels = 1;
+		UploadResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+		UploadResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		UploadResourceDesc.DepthOrArraySize = 1;
+		UploadResourceDesc.SampleDesc.Count = 1;
+
+		// 空闲栈的上传堆临时资源
+		ComPtr<ID3D12Resource> _temp_UAVIdleParticlesStack_UploadResource;
+
+		// 创建上传堆资源
+		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE,
+			&UploadResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+			nullptr, IID_PPV_ARGS(&_temp_UAVIdleParticlesStack_UploadResource));
+
+
+		// 用于传递资源的指针，注意指针类型是 UINT
+		UINT* TransferPointer = nullptr;
+		// Map 开启映射，传递资源地址到指针
+		_temp_UAVIdleParticlesStack_UploadResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
+		
+		// 初始化空闲栈每一个元素
+		for (UINT i = 0; i < MaxAllocParticlesNums; i++)
+		{
+			// 初始化赋值
+			*TransferPointer = i;
+			// 指针偏移 4 字节，切换到下一个栈元素
+			TransferPointer++;
+		}
+
+		// Unmap 关闭映射
+		_temp_UAVIdleParticlesStack_UploadResource->Unmap(0, nullptr);
+
+
+
+		// 复制资源需要使用 GPU 的 CopyEngine 复制引擎，所以需要向命令队列发出复制命令
+		m_CommandAllocator->Reset();								// 先重置命令分配器
+		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);	// 再重置命令列表，复制命令不需要 PSO 状态，所以第二个参数填 nullptr
+
+
+		// 复制之前，需要将 UAV 资源转换到 COPY_DEST 复制目标状态
+		D3D12_RESOURCE_BARRIER UAVToDest_barrier = {};
+		UAVToDest_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		UAVToDest_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		UAVToDest_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+		UAVToDest_barrier.Transition.pResource = m_UAVIdleParticlesStack_DefaultResource.Get();
+
+		// 进行屏障转换
+		m_CommandList->ResourceBarrier(1, &UAVToDest_barrier);
+
+
+		// 发送复制到默认堆的指令 (共享内存 -> GPU 显存)
+		m_CommandList->CopyBufferRegion(m_UAVIdleParticlesStack_DefaultResource.Get(), 0,
+			_temp_UAVIdleParticlesStack_UploadResource.Get(), 0, MaxAllocParticlesNums * sizeof(UINT));
+
+
+		// 复制完成后，需要将 UAV 资源转换回 UNORDERED_ACCESS 无序访问状态
+		D3D12_RESOURCE_BARRIER DestToUAV_barrier = {};
+		DestToUAV_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		DestToUAV_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		DestToUAV_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		DestToUAV_barrier.Transition.pResource = m_UAVIdleParticlesStack_DefaultResource.Get();
+
+		// 进行屏障转换
+		m_CommandList->ResourceBarrier(1, &DestToUAV_barrier);
+
+
+		// 关闭命令列表
+		m_CommandList->Close();
+
+		// 用于传递命令用的临时 ID3D12CommandList 数组
+		ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
+
+		// 提交复制命令！GPU 开始复制！
+		m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
+
+
+
+		// 将围栏预定值设定为下一帧，注意复制资源也需要围栏等待，否则会发生资源冲突！
+		FenceValue++;
+		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
+		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
+		// 设置围栏的预定事件，当复制完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
+		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
+
+
+		// 让主线程强制等待复制完成，经过此函数后 RenderEvent 会自动重置到无信号状态
+		WaitForSingleObject(RenderEvent, INFINITE);
+	}
+
+
+	// 清空 m_StackTopPointer 栈顶指针为 0
+	void STEP24_ClearStackTopPointer()
+	{
+		// 上传堆资源的结构体信息
+		D3D12_RESOURCE_DESC UploadResourceDesc = {};
+		UploadResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		UploadResourceDesc.Width = 4;
+		UploadResourceDesc.Height = 1;
+		UploadResourceDesc.MipLevels = 1;
+		UploadResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+		UploadResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		UploadResourceDesc.DepthOrArraySize = 1;
+		UploadResourceDesc.SampleDesc.Count = 1;
+
+		// 空闲栈的上传堆临时资源
+		ComPtr<ID3D12Resource> _temp_UAVStackTopPointer_UploadResource;
+
+		// 创建上传堆资源
+		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE,
+			&UploadResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+			nullptr, IID_PPV_ARGS(&_temp_UAVStackTopPointer_UploadResource));
+
+
+		// 用于传递资源的指针，注意指针类型是 UINT
+		UINT* TransferPointer = nullptr;
+		// Map 开启映射，传递资源地址到指针
+		_temp_UAVStackTopPointer_UploadResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
+		// 栈顶指针其实就是一个 4 字节 uint，直接指针赋值就行
+		*TransferPointer = 0;
+		// Unmap 关闭映射
+		_temp_UAVStackTopPointer_UploadResource->Unmap(0, nullptr);
+
+
+
+		// 复制资源需要使用 GPU 的 CopyEngine 复制引擎，所以需要向命令队列发出复制命令
+		m_CommandAllocator->Reset();								// 先重置命令分配器
+		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);	// 再重置命令列表，复制命令不需要 PSO 状态，所以第二个参数填 nullptr
+
+
+		// 复制之前，需要将 UAV 资源转换到 COPY_DEST 复制目标状态
+		D3D12_RESOURCE_BARRIER UAVToDest_barrier = {};
+		UAVToDest_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		UAVToDest_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		UAVToDest_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+		UAVToDest_barrier.Transition.pResource = m_UAVStackTopPointer_DefaultResource.Get();
+
+		// 进行屏障转换
+		m_CommandList->ResourceBarrier(1, &UAVToDest_barrier);
+
+
+		// 发送复制到默认堆的指令 (共享内存 -> GPU 显存)
+		m_CommandList->CopyBufferRegion(m_UAVStackTopPointer_DefaultResource.Get(), 0,
+			_temp_UAVStackTopPointer_UploadResource.Get(), 0, 4);
+
+
+		// 复制完成后，需要将 UAV 资源转换回 UNORDERED_ACCESS 无序访问状态
+		D3D12_RESOURCE_BARRIER DestToUAV_barrier = {};
+		DestToUAV_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		DestToUAV_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		DestToUAV_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		DestToUAV_barrier.Transition.pResource = m_UAVStackTopPointer_DefaultResource.Get();
+
+		// 进行屏障转换
+		m_CommandList->ResourceBarrier(1, &DestToUAV_barrier);
+
+
+		// 关闭命令列表
+		m_CommandList->Close();
+
+		// 用于传递命令用的临时 ID3D12CommandList 数组
+		ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
+
+		// 提交复制命令！GPU 开始复制！
+		m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
+
+
+
+		// 将围栏预定值设定为下一帧，注意复制资源也需要围栏等待，否则会发生资源冲突！
+		FenceValue++;
+		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
+		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
+		// 设置围栏的预定事件，当复制完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
+		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
+
+
+		// 让主线程强制等待复制完成，经过此函数后 RenderEvent 会自动重置到无信号状态
+		// 这个时候还在进行资源复制，先不要退出函数
+		WaitForSingleObject(RenderEvent, INFINITE);
+		// 将句柄设置成有信号状态，防止下文的 RenderLoop 一直 case 1 导致窗口白屏
+		SetEvent(RenderEvent);
+	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 创建 m_ComputeUAVSRVHeap，并绑定相应的资源到相应的描述符，在描述符堆上创建 3 UAV + 1 SRV 描述符
+	// 此函数同时还会创建 m_SRVHeap 的第二个描述符：粒子缓冲区 SRV 描述符
+	void STEP25_CreateUAVSRVHeapAndDescriptor()
+	{
+		// m_ComputeUAVSRVHeap 的描述符堆信息结构体
+		D3D12_DESCRIPTOR_HEAP_DESC UAVSRVHeapDesc = {};
+		// 3 UAV + 1 SRV
+		UAVSRVHeapDesc.NumDescriptors = 4;
+		// CBV/SRV/UAV 类型
+		UAVSRVHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+		// 着色器可见标志，这样描述符堆才能绑定到渲染管线供着色器使用
+		UAVSRVHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+		// 创建 m_ComputeUAVSRVHeap
+		m_D3D12Device->CreateDescriptorHeap(&UAVSRVHeapDesc, IID_PPV_ARGS(&m_ComputeUAVSRVHeap));
+
+
+		// 获取 CBV/SRV/UAV 描述符的大小，准备偏移句柄
+		CBVSRVUAVDescriptorSize = m_D3D12Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+
+		// UAV 描述符信息结构体
+		D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDescriptorDesc = {};
+		// 普通缓冲格式都是 DXGI_FORMAT_UNKNOWN (注意下面的 RAW 原始缓冲区)
+		UAVDescriptorDesc.Format = DXGI_FORMAT_UNKNOWN;
+		// 缓冲类型
+		UAVDescriptorDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+		// 没有计数器
+		UAVDescriptorDesc.Buffer.CounterOffsetInBytes = 0;
+		// 首元素索引都是 0
+		UAVDescriptorDesc.Buffer.FirstElement = 0;
+
+
+		// 创建第一个描述符：m_ParticlesBuffer 粒子缓冲区 UAV
+		ComputeUAVSRVHeap_CPUBaseHandle = m_ComputeUAVSRVHeap->GetCPUDescriptorHandleForHeapStart();
+		// RWStructuredBuffer 的 Flag 都是 NONE
+		UAVDescriptorDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+		// m_ParticlesBuffer 的步长 (每个元素的大小)
+		UAVDescriptorDesc.Buffer.StructureByteStride = sizeof(Particle);
+		// m_ParticlesBuffer 分配的元素数量 (最大能容纳的粒子数量)
+		UAVDescriptorDesc.Buffer.NumElements = MaxAllocParticlesNums;
+		// 创建 m_ParticlesBuffer UAV 描述符
+		m_D3D12Device->CreateUnorderedAccessView(m_UAVParticlesBuffer_DefaultResource.Get(),
+			nullptr, &UAVDescriptorDesc, ComputeUAVSRVHeap_CPUBaseHandle);
+
+
+		// 创建第二个描述符：m_IdleParticlesStack 空闲栈 UAV
+		ComputeUAVSRVHeap_CPUBaseHandle.ptr += CBVSRVUAVDescriptorSize;
+		// RWStructuredBuffer 的 Flag 都是 NONE
+		UAVDescriptorDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+		// m_IdleParticlesStack 的步长 (每个元素的大小)
+		UAVDescriptorDesc.Buffer.StructureByteStride = sizeof(Particle);
+		// m_IdleParticlesStack 分配的元素数量 (最大能容纳的粒子数量)
+		UAVDescriptorDesc.Buffer.NumElements = MaxAllocParticlesNums;
+		// 创建 m_IdleParticlesStack UAV 描述符
+		m_D3D12Device->CreateUnorderedAccessView(m_UAVIdleParticlesStack_DefaultResource.Get(),
+			nullptr, &UAVDescriptorDesc, ComputeUAVSRVHeap_CPUBaseHandle);
+
+
+		// 创建第三个描述符：m_StackTopPointer 栈顶指针 UAV
+		ComputeUAVSRVHeap_CPUBaseHandle.ptr += CBVSRVUAVDescriptorSize;
+		// 注意这里！原始缓冲区必须是 DXGI_FORMAT_R32_TYPELESS (32 位无类型格式)！
+		UAVDescriptorDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		// 注意这里！RWByteAddressBuffer 作为原始缓冲区，需要 RAW Flag！
+		UAVDescriptorDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+		// 注意这里！RWByteAddressBuffer 作为原始缓冲区，步长必须为 0！
+		UAVDescriptorDesc.Buffer.StructureByteStride = 0;
+		// m_StackTopPointer 只有一个 uint 元素
+		UAVDescriptorDesc.Buffer.NumElements = 1;
+		// 创建 m_StackTopPointer UAV 描述符
+		m_D3D12Device->CreateUnorderedAccessView(m_UAVStackTopPointer_DefaultResource.Get(),
+			nullptr, &UAVDescriptorDesc, ComputeUAVSRVHeap_CPUBaseHandle);
+
+
+		// SRV 描述符信息结构体
+		D3D12_SHADER_RESOURCE_VIEW_DESC SRVDescriptorDesc = {};
+		// 用于缓冲的描述符都是 DXGI_FORMAT_UNKNOWN
+		SRVDescriptorDesc.Format = DXGI_FORMAT_UNKNOWN;
+		// 缓冲类型
+		SRVDescriptorDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+		// 首元素索引为 0
+		SRVDescriptorDesc.Buffer.FirstElement = 0;
+		// 缓冲区也仍然要指定 RGBA 映射顺序，使用和纹理一样的配置就行
+		SRVDescriptorDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+
+		// 创建第四个描述符：m_SpawnParticlesList 栈顶指针 SRV
+		ComputeUAVSRVHeap_CPUBaseHandle.ptr += CBVSRVUAVDescriptorSize;
+		// StructuredBuffer 的 Flag 都是 NONE
+		SRVDescriptorDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+		// m_SpawnParticlesList 分配的元素数量 (最大能容纳的粒子数量)
+		SRVDescriptorDesc.Buffer.NumElements = MaxAllocParticlesNums;
+		// m_SpawnParticlesList 的步长 (每个元素的大小)
+		SRVDescriptorDesc.Buffer.StructureByteStride = sizeof(Particle);
+		// 创建 m_SpawnParticlesList SRV
+		m_D3D12Device->CreateShaderResourceView(m_SRVSpawnParticlesList_UploadResource.Get(),
+			&SRVDescriptorDesc, ComputeUAVSRVHeap_CPUBaseHandle);
+
+
+		// 创建 m_SRVHeap 的第二个描述符：m_ParticlesBuffer 粒子缓冲区 SRV
+		// 在 D3D12 中，允许将两种不同类型的描述符绑定到同一资源，实现资源不同用途的复用，因为描述符只是表示了资源的用途
+		// 但是，在渲染管线中使用不同类型的描述符，需要进行资源屏障转换，告诉图形驱动 "现在我要换一个姿势使用这个资源"
+		// 而且同一时间内，只能有一个绑定到该资源的描述符生效，否则就会发生资源竞争
+
+		// 先获取第二个 SRV 描述符的 CPU 句柄
+		SRVParticlesBuffer_CPUHandle.ptr = SRVTextureArray_CPUHandle.ptr + CBVSRVUAVDescriptorSize;
+
+		// StructuredBuffer 的 Flag 都是 NONE
+		SRVDescriptorDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+		// m_ParticlesBuffer 分配的元素数量 (最大能容纳的粒子数量)
+		SRVDescriptorDesc.Buffer.NumElements = MaxAllocParticlesNums;
+		// m_ParticlesBuffer 的步长 (每个元素的大小)
+		SRVDescriptorDesc.Buffer.StructureByteStride = sizeof(Particle);
+		// 创建 m_ParticlesBuffer UAV 描述符
+		m_D3D12Device->CreateShaderResourceView(m_UAVParticlesBuffer_DefaultResource.Get(),
+			&SRVDescriptorDesc, SRVParticlesBuffer_CPUHandle);
+
+
+		// 获取 m_ComputeUAVSRVHeap 的 GPU 基址偏移句柄，在渲染管线中方便我们连续绑定
+		ComputeUAVSRVHeap_GPUBaseHandle = m_ComputeUAVSRVHeap->GetGPUDescriptorHandleForHeapStart();
+
+		// 获取 m_SRVHeap 第二个 SRV 的 GPU 句柄
+		SRVParticlesBuffer_GPUHandle.ptr = SRVTextureArray_GPUHandle.ptr + CBVSRVUAVDescriptorSize;
+	}
+
+
+	// 创建用于粒子效果的计算着色器根签名
+	void STEP26_CreateComputeParticleRootSignature()
+	{
+		// ComputeParticleRootSignature 的根参数 + 静态采样器列表
+		// Para 0: (Type = Root Constants,	1 DWORD)  (b0, space0) CBV 根常量，用于 SpawnCSMain 的常量缓冲
+		// Para 1: (Type = Root Constants,	3 DWORD)  (b1, space0) CBV 根常量，用于 UpdateCSMain 的常量缓冲
+		// Para 2: (Type = Descriptor Table, 1 DWORD) (u0 - u2, t0, space0) 根描述表，用于着色器用到的资源
+		// 
+		// None Static Sampler	没有静态采样器，计算着色器现在不需要用到
+
+		ComPtr<ID3DBlob> SignatureBlob;			// 根签名字节码
+		ComPtr<ID3DBlob> ErrorBlob;				// 错误字节码
+
+		D3D12_ROOT_PARAMETER RootParameters[3] = {};		// 根参数数组
+
+
+		// 第一个根参数：32 位根常量 (SpawnParticlesData)
+		RootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+		RootParameters[0].Constants.Num32BitValues = 1;		// 只有一个根常量
+		RootParameters[0].Constants.ShaderRegister = 0;		// b0
+		RootParameters[0].Constants.RegisterSpace = 0;		// space0
+		RootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+
+		// 第二个根参数：三个 32 位根常量 (UpdateParticlesData)
+		RootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+		RootParameters[1].Constants.Num32BitValues = 3;		// 三个根常量
+		RootParameters[1].Constants.ShaderRegister = 1;		// b1
+		RootParameters[1].Constants.RegisterSpace = 0;		// space0
+		RootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+
+		// 第三个根参数：根描述表 (3 UAV Range + 1 SRV Range)，根描述表本质上就是个排插，能快速绑定多个描述符
+		D3D12_DESCRIPTOR_RANGE UAVSRVRange[2] = {};					// 3 UAV Range + 1 SRV Range
+
+		// 第一个 Range：UAV Range (m_ParticlesBuffer、m_IdleParticlesStack、m_StackTopPointer)
+		UAVSRVRange[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;	// 描述符 Range 在这里分流
+		UAVSRVRange[0].NumDescriptors = 3;							// UAV Range 有三个描述符
+		UAVSRVRange[0].BaseShaderRegister = 0;						// u0 - u2
+		UAVSRVRange[0].RegisterSpace = 0;							// space0
+		UAVSRVRange[0].OffsetInDescriptorsFromTableStart = 0;		// UAV Range 前面有 0 个描述符
+
+		// 第二个 Range：SRV Range (m_SpawnParticlesList)
+		UAVSRVRange[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		UAVSRVRange[1].NumDescriptors = 1;							// SRV Range 只有一个描述符
+		UAVSRVRange[1].BaseShaderRegister = 0;						// t0
+		UAVSRVRange[1].RegisterSpace = 0;							// space0
+		UAVSRVRange[1].OffsetInDescriptorsFromTableStart = 3;		// SRV Range 前面有 3 个描述符
+
+		RootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		RootParameters[2].DescriptorTable.NumDescriptorRanges = 2;	// 两个 Range
+		RootParameters[2].DescriptorTable.pDescriptorRanges = UAVSRVRange;
+		RootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+
+
+		// 根签名信息结构体，上限 64 DWORD，静态采样器不占用根签名
+		D3D12_ROOT_SIGNATURE_DESC RootSignatureDesc = {};
+		RootSignatureDesc.NumParameters = 3;				// 三个根参数
+		RootSignatureDesc.pParameters = RootParameters;		// 根参数数组指针
+		RootSignatureDesc.NumStaticSamplers = 0;
+		RootSignatureDesc.pStaticSamplers = nullptr;
+		RootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;	// 没有特殊标志
+
+
+		// 编译根签名，让根签名先编译成 GPU 可读的二进制字节码
+		D3D12SerializeRootSignature(&RootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &SignatureBlob, &ErrorBlob);
+		if (ErrorBlob)
+		{
+			OutputDebugStringA((const char*)ErrorBlob->GetBufferPointer());
+			OutputDebugStringA("\n");
+		}
+
+		// 用这个二进制字节码创建根签名对象
+		m_D3D12Device->CreateRootSignature(0, SignatureBlob->GetBufferPointer(), SignatureBlob->GetBufferSize(),
+			IID_PPV_ARGS(&m_ComputeParticleRootSignature));
+	}
+
+
+	// 创建用于粒子效果的两个 PSO：m_ComputeSpawnParticlePSO 和 m_ComputeUpdateParticlePSO
+	void STEP27_CreateComputeParticlePSO()
+	{
+		// 计算着色器使用的 PSO 信息结构体，注意类型是 D3D12_COMPUTE_PIPELINE_STATE_DESC
+		D3D12_COMPUTE_PIPELINE_STATE_DESC ComputePSODesc = {};
+
+		// 第一次绑定根签名，使用的是上面的 m_ComputeParticleRootSignature
+		// 本次设置是将根签名与 PSO 绑定，生成对应版本的根签名适配 PSO，设置渲染管线的输入参数状态
+		ComputePSODesc.pRootSignature = m_ComputeParticleRootSignature.Get();
+
+		// 不使用特殊标志
+		ComputePSODesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+
+
+		ComPtr<ID3DBlob> ComputeShaderBlob;		// 计算着色器二进制字节码
+		ComPtr<ID3DBlob> ErrorBlob;				// 错误字节码
+
+		// 编译计算着色器的 SpawnCSMain 函数
+		D3DCompileFromFile(L"ParticleShader.hlsl", nullptr, nullptr, "SpawnCSMain", "cs_5_1", NULL, NULL, &ComputeShaderBlob, &ErrorBlob);
+		if (ErrorBlob)
+		{
+			OutputDebugStringA((const char*)ErrorBlob->GetBufferPointer());
+			OutputDebugStringA("\n");
+		}
+
+		// 设置 CS 字节码
+		ComputePSODesc.CS.BytecodeLength = ComputeShaderBlob->GetBufferSize();
+		ComputePSODesc.CS.pShaderBytecode = ComputeShaderBlob->GetBufferPointer();
+
+		// 创建用于 SpawnCSMain 添加并生成新粒子的 PSO
+		m_D3D12Device->CreateComputePipelineState(&ComputePSODesc, IID_PPV_ARGS(&m_ComputeSpawnParticlePSO));
+
+
+		// 编译计算着色器的 UpdateCSMain 函数
+		D3DCompileFromFile(L"ParticleShader.hlsl", nullptr, nullptr, "UpdateCSMain", "cs_5_1", NULL, NULL, &ComputeShaderBlob, &ErrorBlob);
+		if (ErrorBlob)
+		{
+			OutputDebugStringA((const char*)ErrorBlob->GetBufferPointer());
+			OutputDebugStringA("\n");
+		}
+
+		// 设置 CS 字节码
+		ComputePSODesc.CS.BytecodeLength = ComputeShaderBlob->GetBufferSize();
+		ComputePSODesc.CS.pShaderBytecode = ComputeShaderBlob->GetBufferPointer();
+
+		// 创建用于 UpdateCSMain 添加并生成新粒子的 PSO
+		m_D3D12Device->CreateComputePipelineState(&ComputePSODesc, IID_PPV_ARGS(&m_ComputeUpdateParticlePSO));
+	}
+
+
+	// 创建五个用于 UAV 资源相关的资源屏障
+	// 上文 STEP23_CreateUAVSRVHeapAndDescriptor 已经说明原因了，描述符只描述资源的用途与布局
+	// 不同类型的描述符可以绑定同一资源，但同时只能有一个描述符生效，而且必须经过资源屏障转换
+	void STEP28_CreateParticlesBufferBarrier()
+	{
+		// UAVToSRV_barrier 屏障：Unordered Access 无序访问状态 -> Non Pixel Shader Resource 常规着色器资源状态
+		// NON_PIXEL_SHADER_RESOURCE 的意思是 除了像素着色器，其他着色器都可以使用这个资源
+		// 这个屏障用于 UpdateCSMain 已经执行完成，准备将粒子缓冲区交给顶点着色器进行渲染
+		UAVToSRV_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		UAVToSRV_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		UAVToSRV_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+		UAVToSRV_barrier.Transition.pResource = m_UAVParticlesBuffer_DefaultResource.Get();
+
+		// SRVToUAV_barrier 屏障：Non Pixel Shader Resource 常规着色器资源状态 -> Unordered Access 无序访问状态
+		// 这个屏障用于粒子缓冲区已经全部渲染完成，交给下一帧计算着色器计算并更新粒子缓冲
+		SRVToUAV_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		SRVToUAV_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+		SRVToUAV_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		SRVToUAV_barrier.Transition.pResource = m_UAVParticlesBuffer_DefaultResource.Get();
+
+
+
+		// UAVToCopySource_barrier 屏障：Unordered Access 无序访问状态 -> Copy Source 复制源状态
+		// 下文 Render 每帧的末尾都要获取栈顶指针的值 (活跃粒子的数量)，需要复制并回读 UAV 显存资源
+		// 如果没有下面这两个资源屏障的话，默认堆 -> 回读堆 的复制操作可能会失败，或者发生数据错误
+		UAVToCopySource_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		UAVToCopySource_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		UAVToCopySource_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+		UAVToCopySource_barrier.Transition.pResource = m_UAVStackTopPointer_DefaultResource.Get();
+
+		// UAVToCopySource_barrier 屏障：Unordered Access 无序访问状态 -> Copy Source 复制源状态
+		// 当复制完成后，转换到无序访问状态，供下一次渲染的计算着色器使用，如此循环往复
+		CopySourceToUAV_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		CopySourceToUAV_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+		CopySourceToUAV_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		CopySourceToUAV_barrier.Transition.pResource = m_UAVStackTopPointer_DefaultResource.Get();
+
+
+
+		// 下文的 Render 函数，我们可能要同时进行"新增粒子"与"更新粒子"的操作
+		// 命令列表和队列只会保证命令的执行次序，但不保证前一个计算着色器的写入结果对后一个计算着色器立即可见
+		// (由于 GPU 内部的缓存与流水线并行机制，写入的数据可能尚未刷新到显存)
+		// 在连续执行两个计算着色器 (SpawnCSMain 和 UpdateCSMain) 之间，
+		// 需要插入 UAV 屏障来确保 SpawnCSMain 对所有三个 UAV 资源的写入操作
+		// 在 UpdateCSMain 开始读取之前全部完成，避免数据竞争
+		UAVDispatch_barrier[0].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+		UAVDispatch_barrier[0].UAV.pResource = m_UAVParticlesBuffer_DefaultResource.Get();
+		UAVDispatch_barrier[1].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+		UAVDispatch_barrier[1].UAV.pResource = m_UAVIdleParticlesStack_DefaultResource.Get();
+		UAVDispatch_barrier[2].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+		UAVDispatch_barrier[2].UAV.pResource = m_UAVStackTopPointer_DefaultResource.Get();
+	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 创建 Constant Buffer Resource 常量缓冲资源
+	void STEP29_CreateCBVResource()
+	{
+		// 常量资源宽度，这里填整个结构体的大小。注意！硬件要求，常量缓冲需要 256 字节对齐！所以这里要进行 Ceil 向上取整，进行内存对齐！
+		// D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT = 256
+		UINT CBufferWidth = Ceil(sizeof(CBuffer), 256) * 256;
+
+		D3D12_RESOURCE_DESC CBVResourceDesc = {};						// 常量缓冲资源信息结构体
+		CBVResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;	// 上传堆资源都是缓冲
+		CBVResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;		// 上传堆资源都是按行存储数据的 (一维线性存储)
+		CBVResourceDesc.Width = CBufferWidth;							// 常量缓冲区资源宽度 (要分配显存的总大小)
+		CBVResourceDesc.Height = 1;										// 上传堆资源都是存储一维线性资源，所以高度必须为 1
+		CBVResourceDesc.Format = DXGI_FORMAT_UNKNOWN;					// 上传堆资源的格式必须为 DXGI_FORMAT_UNKNOWN
+		CBVResourceDesc.DepthOrArraySize = 1;							// 资源深度，这个是用于纹理数组和 3D 纹理的，上传堆资源必须为 1
+		CBVResourceDesc.MipLevels = 1;									// Mipmap 等级，这个是用于纹理的，上传堆资源必须为 1
+		CBVResourceDesc.SampleDesc.Count = 1;							// 资源采样次数，上传堆资源都是填 1
+
+		// 上传堆属性的结构体，上传堆位于 CPU 和 GPU 的共享内存
+		D3D12_HEAP_PROPERTIES UploadHeapDesc = { D3D12_HEAP_TYPE_UPLOAD };
+
+		// 创建常量缓冲资源
+		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE, &CBVResourceDesc,
+			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_CBVResource));
+
+		// 常量缓冲直接 Map 映射到结构体指针就行即可，不需要再 Unmap，小数据下常量缓冲传递效率很高
+		m_CBVResource->Map(0, nullptr, reinterpret_cast<void**>(&m_ConstantBuffer));
+	}
+
+
+
+	// 将 9 个旋转矩阵复制到常量缓冲的 BlockFaceForwardMatrix 里，后面这个成员不会再变化了
+	// shader 中会将实例数据与对应矩阵相乘，会得到不同朝向的方块，这样就能改变方块的朝向行为
+	void STEP30_CopyRotateMatrixToCBuffer()
+	{
+		// 面向右面 (正面)，不用旋转，直接乘单位矩阵
+		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[0], XMMatrixIdentity());
+		// 面向左面，根据左手定则，向 y 轴旋转 180°
+		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[1], XMMatrixRotationY(XM_PI));
+		// 面向前面，向 y 轴旋转 90°
+		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[2], XMMatrixRotationY(XM_PIDIV2));
+		// 面向后面，向 y 轴旋转 -90°
+		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[3], XMMatrixRotationY(-XM_PIDIV2));
+		// 面向上面，向 z 轴旋转 -90° (对于正面朝上的特殊方块，相当于旋转到左面)
+		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[4], XMMatrixRotationZ(-XM_PIDIV2));
+		// 面向下面，向 z 轴旋转 90° (对于正面朝上的特殊方块，相当于旋转到右面)
+		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[5], XMMatrixRotationZ(XM_PIDIV2));
+		// 对于正面朝上的特殊方块，向 x 轴旋转 -90° 面向前面
+		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[6], XMMatrixRotationX(-XM_PIDIV2));
+		// 对于正面朝上的特殊方块，向 x 轴旋转 90° 面向后面
+		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[7], XMMatrixRotationX(XM_PIDIV2));
+		// 对于正面朝上的特殊方块，向 y 轴旋转 180° 翻转到下面
+		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[8], XMMatrixRotationX(XM_PI));
+	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 创建用于渲染的根签名
+	void STEP31_CreateRenderRootSignature()
+	{
+		// RenderRootSignature 根参数 + 静态采样器列表
 		// Para 0: (Type = Root Descriptor,  2 DWORD)  (b0, space0) CBV 根描述符，用于常量缓冲
 		// Para 1: (Type = Root Descriptor,  2 DWORD)  (t0, space0) SRV 根描述符，用于结构化缓冲区
-		// Para 2: (Type = Descriptor Table, 1 DWORD)  (t1, space0) SRV 描述符表，用于纹理数组
+		// Para 2: (Type = Descriptor Table, 1 DWORD)  (t1 - t2, space0) SRV 描述符表，用于纹理数组与粒子缓冲区
 		// 
 		// Sampler 0: (Type = Static Sampler) (s0, space0) 静态采样器 (邻近点过滤)，用于纹理数组采样
 
 		ComPtr<ID3DBlob> SignatureBlob;			// 根签名字节码
 		ComPtr<ID3DBlob> ErrorBlob;				// 错误字节码
 
-		D3D12_ROOT_PARAMETER RootParameters[3] = {};						// 根参数数组
-
-		// 把更新频率高的根参数放前面，低的放后面，可以优化性能 (微软官方文档建议)
-		// 因为 DirectX API 能对根签名进行 Version Control 版本控制，在根签名越前面的根参数，访问速度更快
-
-		// 第一个根参数：CBV 根描述符 (常量缓冲)，根描述符是内联描述符，所以下文绑定根参数时，只需要传递常量缓冲资源的地址即可
-		D3D12_ROOT_DESCRIPTOR CBVRootDescriptorDesc = {};					// CBV 根描述符信息结构体
-		CBVRootDescriptorDesc.ShaderRegister = 0;							// 要绑定的寄存器编号，这里对应 HLSL 的 b0 寄存器
-		CBVRootDescriptorDesc.RegisterSpace = 0;							// 要绑定的命名空间，这里对应 HLSL 的 space0
-
-		RootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;	// 常量缓冲对整个渲染管线都可见
-		RootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;	// 根参数的类型：CBV 根描述符
-		RootParameters[0].Descriptor = CBVRootDescriptorDesc;				// 填上文的结构体
+		D3D12_ROOT_PARAMETER RootParameters[3] = {};		// 根参数数组
 
 
-		// 第二个根参数：SRV 根描述符 (结构化缓冲区)，注意！SRV 根描述符不能用于纹理！
-		D3D12_ROOT_DESCRIPTOR SRVRootDescriptorDesc = {};					// SRV 根描述符信息结构体
-		SRVRootDescriptorDesc.ShaderRegister = 0;							// t0
-		SRVRootDescriptorDesc.RegisterSpace = 0;							// space0
-
-		RootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;	// 结构化缓冲对整个渲染管线都可见
-		RootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;	// 根参数的类型：SRV 根描述符
-		RootParameters[1].Descriptor = SRVRootDescriptorDesc;				// 填上文的结构体
+		// 第一个根参数：CBV 根描述符 (GlobalData)
+		RootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+		RootParameters[0].Descriptor.ShaderRegister = 0;	// b0
+		RootParameters[0].Descriptor.RegisterSpace = 0;		// space0
+		RootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 
-		// 第三个根参数：根描述表 (Range: SRV)
-		D3D12_DESCRIPTOR_RANGE SRVDescriptorRangeDesc = {};						// Range 描述符范围结构体，一块 Range 表示一堆连续的同类型描述符
-		SRVDescriptorRangeDesc.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;		// Range 类型，这里指定 SRV 类型，CBV_SRV_UAV 在这里分流
-		SRVDescriptorRangeDesc.NumDescriptors = 1;								// Range 里面的描述符数量 N，一次可以绑定多个描述符到多个寄存器槽上
-		SRVDescriptorRangeDesc.BaseShaderRegister = 1;							// Range 要绑定的起始寄存器槽编号 i，绑定范围是 [t(i),t(i+N)]，我们绑定 t1
-		SRVDescriptorRangeDesc.RegisterSpace = 0;								// Range 要绑定的寄存器空间，整个 Range 都会绑定到同一寄存器空间上，我们绑定 space0
-		SRVDescriptorRangeDesc.OffsetInDescriptorsFromTableStart = 0;			// Range 到根描述表开头的偏移量 (单位：描述符)，根签名需要用它来寻找 Range 的地址，我们这填 0 就行
+		// 第二个根参数：SRV 根描述符 (BlockCubeTexture_IndexGroup)
+		RootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		RootParameters[1].Descriptor.ShaderRegister = 0;	// t0
+		RootParameters[1].Descriptor.RegisterSpace = 0;		// space0
+		RootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-		D3D12_ROOT_DESCRIPTOR_TABLE RootDescriptorTableDesc = {};				// RootDescriptorTable 根描述表信息结构体，一个 Table 可以有多个 Range
-		RootDescriptorTableDesc.pDescriptorRanges = &SRVDescriptorRangeDesc;	// Range 描述符范围指针
-		RootDescriptorTableDesc.NumDescriptorRanges = 1;						// 根描述表中 Range 的数量
 
-		RootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;				// 根参数在着色器中的可见性，这里指定仅在像素着色器可见 (只有像素着色器用到了纹理)
-		RootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;	// 根参数类型，这里我们选 Table 根描述表，一个根描述表占用 1 DWORD
-		RootParameters[2].DescriptorTable = RootDescriptorTableDesc;					// 根参数指针
+		// 第三个根参数：根参数表 (2 SRV Range: m_TextureArray、m_ParticlesBuffer)
+		D3D12_DESCRIPTOR_RANGE SRVRange = {};
+		SRVRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		SRVRange.NumDescriptors = 2;		// 两个描述符 (纹理数组 + 粒子缓冲区)
+		SRVRange.BaseShaderRegister = 1;	// t1 - t2
+		SRVRange.RegisterSpace = 0;			// space0
+		SRVRange.OffsetInDescriptorsFromTableStart = 0;
+
+		RootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		RootParameters[2].DescriptorTable.NumDescriptorRanges = 1;	// 一个 Range
+		RootParameters[2].DescriptorTable.pDescriptorRanges = &SRVRange;
+		RootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 
 
 		D3D12_STATIC_SAMPLER_DESC StaticSamplerDesc = {};						// 静态采样器结构体，静态采样器不会占用根签名
 		StaticSamplerDesc.ShaderRegister = 0;									// 要绑定的寄存器槽，对应 s0
 		StaticSamplerDesc.RegisterSpace = 0;									// 要绑定的寄存器空间，对应 space0
-		StaticSamplerDesc.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;		// 静态采样器在着色器中的可见性，这里指定仅在像素着色器可见 (只有像素着色器用到了纹理采样)
 		StaticSamplerDesc.Filter = D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT;	// 纹理过滤类型，这里我们直接选 邻近点采样 就行
 		StaticSamplerDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;			// 在 U 方向上的纹理寻址方式
 		StaticSamplerDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;			// 在 V 方向上的纹理寻址方式
@@ -2559,41 +3365,45 @@ public:
 		StaticSamplerDesc.MinLOD = 0;											// 最小 LOD 细节层次，这里我们默认填 0 就行
 		StaticSamplerDesc.MaxLOD = D3D12_FLOAT32_MAX;							// 最大 LOD 细节层次，这里我们默认填 D3D12_FLOAT32_MAX (没有 LOD 上限)
 		StaticSamplerDesc.MipLODBias = 0;										// 基础 Mipmap 采样偏移量，我们这里我们直接填 0 就行
-		StaticSamplerDesc.MaxAnisotropy = 1;									// 各向异性过滤等级，我们不使用各向异性过滤，需要默认填 1
+		StaticSamplerDesc.MaxAnisotropy = 1;									// 各向异性过滤等级，我们不使用各向异性过滤，默认填 1
 		StaticSamplerDesc.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;			// 这个是用于阴影贴图的，我们不需要用它，所以填 D3D12_COMPARISON_FUNC_NEVER
+		StaticSamplerDesc.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;		// 静态采样器在着色器中的可见性，这里指定仅在像素着色器可见
 
 
-		D3D12_ROOT_SIGNATURE_DESC rootsignatureDesc = {};			// 根签名信息结构体，上限 64 DWORD，静态采样器不占用根签名
-		rootsignatureDesc.NumParameters = 3;						// 根参数数量
-		rootsignatureDesc.pParameters = RootParameters;				// 根参数指针
-		rootsignatureDesc.NumStaticSamplers = 1;					// 静态采样器数量
-		rootsignatureDesc.pStaticSamplers = &StaticSamplerDesc;		// 静态采样器指针
-		// 根签名标志，可以设置渲染管线不同阶段下的输入参数状态。注意这里！我们要从 IA 阶段输入顶点数据，所以要通过根签名，设置渲染管线允许从 IA 阶段读入数据
-		rootsignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+		// 根签名信息结构体，上限 64 DWORD，静态采样器不占用根签名
+		D3D12_ROOT_SIGNATURE_DESC RootSignatureDesc = {};
+		RootSignatureDesc.NumParameters = 3;					// 三个根参数
+		RootSignatureDesc.pParameters = RootParameters;			// 根参数数组指针
+		RootSignatureDesc.NumStaticSamplers = 1;				// 一个静态采样器
+		RootSignatureDesc.pStaticSamplers = &StaticSamplerDesc;	// 静态采样器指针
+
+		// 允许顶点/实例数据从 IA 阶段输入
+		RootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
 
 		// 编译根签名，让根签名先编译成 GPU 可读的二进制字节码
-		D3D12SerializeRootSignature(&rootsignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &SignatureBlob, &ErrorBlob);
-		if (ErrorBlob)		// 如果根签名编译出错，ErrorBlob 可以提供报错信息
+		D3D12SerializeRootSignature(&RootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &SignatureBlob, &ErrorBlob);
+		if (ErrorBlob)
 		{
 			OutputDebugStringA((const char*)ErrorBlob->GetBufferPointer());
 			OutputDebugStringA("\n");
 		}
 
-
 		// 用这个二进制字节码创建根签名对象
-		m_D3D12Device->CreateRootSignature(0, SignatureBlob->GetBufferPointer(), SignatureBlob->GetBufferSize(), IID_PPV_ARGS(&m_RootSignature));
-
+		m_D3D12Device->CreateRootSignature(0, SignatureBlob->GetBufferPointer(), SignatureBlob->GetBufferSize(),
+			IID_PPV_ARGS(&m_RenderRootSignature));
 	}
 
 
 
-	// 创建 PSO 渲染管线状态对象，此函数会一起创建 m_RenderBlockPSO 和 m_DestroyStagePSO
-	void STEP23_CreatePSO()
+	// 创建用于渲染的三个 PSO：m_RenderBlockPSO、m_RenderParticlePSO、m_DestroyStagePSO
+	void STEP32_CreateRenderPSO()
 	{
 		// PSO 信息结构体
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc = {};
 
-		// Input Assembler 输入装配阶段，这里复用了输入布局，详情见 DestroyStageShader.hlsl
+		// Input Assembler 输入装配阶段，这里复用了输入布局
 		D3D12_INPUT_LAYOUT_DESC InputLayoutDesc = {};			// 输入样式信息结构体
 		D3D12_INPUT_ELEMENT_DESC InputElementDesc[6] = {};		// 输入元素信息结构体数组
 
@@ -2675,7 +3485,7 @@ public:
 		ComPtr<ID3DBlob> ErrorBlob;				// 错误字节码
 
 		// 编译顶点着色器 Vertex Shader
-		D3DCompileFromFile(L"RenderShader.hlsl", nullptr, nullptr, "VSMain", "vs_5_1", NULL, NULL, &VertexShaderBlob, &ErrorBlob);
+		D3DCompileFromFile(L"RenderBlockShader.hlsl", nullptr, nullptr, "VSMain", "vs_5_1", NULL, NULL, &VertexShaderBlob, &ErrorBlob);
 		if (ErrorBlob)		// 如果着色器编译出错，ErrorBlob 可以提供报错信息
 		{
 			OutputDebugStringA((const char*)ErrorBlob->GetBufferPointer());
@@ -2683,7 +3493,7 @@ public:
 		}
 
 		// 编译像素着色器 Pixel Shader
-		D3DCompileFromFile(L"RenderShader.hlsl", nullptr, nullptr, "PSMain", "ps_5_1", NULL, NULL, &PixelShaderBlob, &ErrorBlob);
+		D3DCompileFromFile(L"RenderBlockShader.hlsl", nullptr, nullptr, "PSMain", "ps_5_1", NULL, NULL, &PixelShaderBlob, &ErrorBlob);
 		if (ErrorBlob)		// 如果着色器编译出错，ErrorBlob 可以提供报错信息
 		{
 			OutputDebugStringA((const char*)ErrorBlob->GetBufferPointer());
@@ -2700,7 +3510,7 @@ public:
 		PSODesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;		// 纯色填充
 
 		// 第一次设置根签名！本次设置是将根签名与 PSO 绑定，生成对应版本的根签名适配 PSO，设置渲染管线的输入参数状态
-		PSODesc.pRootSignature = m_RootSignature.Get();
+		PSODesc.pRootSignature = m_RenderRootSignature.Get();
 
 		// 设置深度测试状态
 		PSODesc.DSVFormat = DSVFormat;											// 设置深度缓冲的格式
@@ -2743,8 +3553,35 @@ public:
 		// 设置采样掩码，这个是用于多重采样的，我们直接填全采样 (UINT_MAX，就是将 UINT 所有的比特位全部填充为 1) 就行
 		PSODesc.SampleMask = UINT_MAX;
 
+
 		// 创建用于渲染方块的 m_RenderBlockPSO 对象
 		m_D3D12Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&m_RenderBlockPSO));
+
+
+
+		// 除了 shader，其他都共用，创建 m_RenderParticlePSO
+		D3DCompileFromFile(L"RenderParticleShader.hlsl", nullptr, nullptr, "VSMain", "vs_5_1", NULL, NULL, &VertexShaderBlob, &ErrorBlob);
+		if (ErrorBlob)
+		{
+			OutputDebugStringA((const char*)ErrorBlob->GetBufferPointer());
+			OutputDebugStringA("\n");
+		}
+
+		D3DCompileFromFile(L"RenderParticleShader.hlsl", nullptr, nullptr, "PSMain", "ps_5_1", NULL, NULL, &PixelShaderBlob, &ErrorBlob);
+		if (ErrorBlob)
+		{
+			OutputDebugStringA((const char*)ErrorBlob->GetBufferPointer());
+			OutputDebugStringA("\n");
+		}
+
+		PSODesc.VS.pShaderBytecode = VertexShaderBlob->GetBufferPointer();
+		PSODesc.VS.BytecodeLength = VertexShaderBlob->GetBufferSize();
+		PSODesc.PS.pShaderBytecode = PixelShaderBlob->GetBufferPointer();
+		PSODesc.PS.BytecodeLength = PixelShaderBlob->GetBufferSize();
+
+
+		// 创建用于渲染粒子的 m_RenderParticlePSO
+		m_D3D12Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&m_RenderParticlePSO));
 
 
 
@@ -2769,33 +3606,11 @@ public:
 		PSODesc.PS.BytecodeLength = PixelShaderBlob->GetBufferSize();
 
 
-		// 我们绘制的破坏纹理包围盒，经过变换后深度和原方块是差不多的，会发生和第 8 章一样的 Z-fighting 深度冲突
-		// 两个完全重合或距离极近的平面，它们的深度值在有限的深度缓冲精度下几乎一模一样，
-		// 导致 GPU 不知道该让哪个面显示在前面，结果就是两个面的像素疯狂闪烁、交错，看起来非常混乱，这就是深度冲突
-		// 我们需要修改深度缓冲，让它的比较方式为 LESS_EQUAL，深度禁止写入，一样能通过深度测试，深度冲突的概率会降低很多
-
 		// 深度比较方式 改为 深度小于或等于原有像素 就通过测试 (NewPixel.Depth <= CurrentPixel.Depth)
 		PSODesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 		// 禁止深度写入，但允许读取已有的深度进行比较
 		PSODesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
 
-
-		// 本章我们要正式接触 Depth Bias 深度偏移技术，它是更好解决 Z-Fighting 深度冲突的不二人选
-		// 设置了上面这两个深度配置，只能保证鼠标不动，视角固定的情况下，不会发生深度冲突
-		// 然而深度缓冲的精度是有限的，一旦鼠标快速运动，视角大幅度旋转，深度值随透视关系发生变化
-		// 原先比较稳定的缓冲区深度竞争加剧，误差加大，超出了 GPU 可以处理的最小精度单位，再次发生深度冲突
-		// 你破坏方块的时候快速移动视角，就会发现还是会出现闪烁现象
-
-		// 深度偏移的核心思想是：人为地在渲染其中一个表面时，给它的深度值加上一个微小的、可控的偏移量，
-		// 让两个表面产生一个稳定的深度差，从而让深度测试总能得出相同的结果。
-		// 最终偏移量的大概计算公式：
-		// 最终偏移 = DepthBias * 格式系数 + SlopeScaledDepthBias * Max(三角形斜率)
-		
-		// 深度偏移早在 DirectX 9 就加入并标准化了，它是一个非常成熟且稳定的基础特性
-		// 深度值最终是在光栅化阶段，通过对顶点深度进行插值计算出来的。
-		// 硬件深度偏移正是发生在这个像素深度值刚刚被插值计算出来之后，但在进行深度测试之前的"后处理"步骤，非常高效
-		// (PSO 固定功能的深度偏移发生在 Early-Z 之前；shader 的深度偏移 (指定 SV_Depth) 发生在深度测试之前)
-		// 在光栅化阶段进行固定功能的深度偏移，是在功能、性能和易用性上的最佳平衡点
 
 		// 常量偏移，这是一个整数，它会乘以一个与深度缓冲区格式相关的系数 (由硬件指定)，得到一个固定深度偏移量
 		// 设为 -1，意味着给所有像素的深度值加上一个微小的负常数，让它们整体上更靠近相机一点
@@ -2807,8 +3622,6 @@ public:
 		// 偏移钳位，这是一个浮点数，用来限制最终偏移量的最大值 (或最小值)，设 0 表示不进行钳位
 		PSODesc.RasterizerState.DepthBiasClamp = 0;
 
-		// 设置上面这五个参数的根本原因，就是为了彻底解决 Z-Fighting 深度冲突问题
-		// 让破坏纹理的深度值整体上略微小于 (更靠近相机) 原始的方块深度，从而在深度测试中胜出，被绘制在方块之上
 
 		// 创建用于渲染方块表面破坏纹理的 m_DestroyStagePSO 对象
 		m_D3D12Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&m_DestroyStagePSO));
@@ -2821,7 +3634,7 @@ public:
 
 
 	// 创建顶点流的顶点缓冲和索引缓冲，用的是 VBV0 和 IBV
-	void STEP24_CreatePerVertexAndIndexBuffer()
+	void STEP33_CreatePerVertexAndIndexBuffer()
 	{
 		// 上传堆顶点资源结构体
 		D3D12_RESOURCE_DESC VertexResourceDesc = {};
@@ -2880,30 +3693,25 @@ public:
 
 
 	// 创建实例流缓冲，最大放 10000 个方块，用的是 VBV1
-	void STEP25_CreatePerInstanceBuffer()
+	void STEP34_CreatePerInstanceBuffer()
 	{
-		// CPU 端存储实例的 vector 重置大小，D3D12Resource 是不能随便改资源长度的
-		// 创建资源长度大小就不能变了，想要改长度只能 Reset 重置资源，然后再开一次
-		// 但是 DX12 鼓励我们考虑可能要用到的资源大小，把缓冲开大一点，这样可以省去重复创建资源的高额开销
-		// 就像打 OI 题那样直接开超大全局静态数组，只要不超数据范围，怎么用都行，我们这里开 10000 个方块的空间
-
-		srand(time(0));						// 设置随机种子
 		BLOCKINSTANCE blockstance = {};		// 方块实例结构体
 
 		// 在世界中心上面一个方块设置一个不可破坏的基岩
-		blockstance.BlockOffset = XMFLOAT3(0, 2, 0);
+		blockstance.BlockOffset = XMFLOAT3(0, 1, 0);
 		blockstance.BlockType = 0;
 		blockstance.RotateIndex = 0;
 		// 新增方块
 		BlockGroup.push_back(blockstance);
 
+		/*
 		// 之后的 25 个方块，随机设置除基岩以外的方块
 		for (int x = 0; x < 5; x++)
 		{
 			for (int z = 0; z < 5; z++)
 			{
-				// 从 (-4, 0, -4) 开始设置位移，注意方块边长是 2
-				blockstance.BlockOffset = XMFLOAT3(-4 + 2 * x, 0, -4 + 2 * z);
+				// 从 (-4, 0, -4) 开始设置位移
+				blockstance.BlockOffset = XMFLOAT3(-4 + x, 0, -4 + z);
 				// [a, b] 下随机数范围公式: rand() % (b - a) + a，这里我们跳过基岩
 				blockstance.BlockType = rand() % (BlockCubeTexture_IndexGroup.size() - 1) + 1;
 				// 设置正面就行
@@ -2912,6 +3720,7 @@ public:
 				BlockGroup.push_back(blockstance);
 			}
 		}
+		*/
 
 
 		// 上传堆实例资源结构体
@@ -2932,7 +3741,7 @@ public:
 
 		// 将数据复制到上传堆，开启映射
 		m_BlockInstanceResource->Map(0, nullptr, reinterpret_cast<void**>(&m_BlockInstanceMapPointer));
-		
+
 		// 实例数据是随时可以变化的，我们要破坏/放置方块，涉及到实例的 new/delete，不用 Unmap 了，
 		// 这是一个动态资源，下文的 UpdateConstantBuffer 还要进行 memcpy 进行更新 (和常量缓冲一样)
 
@@ -2945,100 +3754,298 @@ public:
 
 
 
-	// 将 9 个旋转矩阵复制到常量缓冲的 BlockFaceForwardMatrix 里，后面这个成员不会再变化了
-	// shader 中会将实例数据与对应矩阵相乘，会得到不同朝向的方块，这样就能改变方块的朝向行为
-	void STEP26_CopyRotateMatrixToCBuffer()
-	{
-		// 面向右面 (正面)，不用旋转，直接乘单位矩阵
-		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[0], XMMatrixIdentity());
-		// 面向左面，根据左手定则，向 y 轴旋转 180°
-		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[1], XMMatrixRotationY(XM_PI));
-		// 面向前面，向 y 轴旋转 90°
-		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[2], XMMatrixRotationY(XM_PIDIV2));
-		// 面向后面，向 y 轴旋转 -90°
-		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[3], XMMatrixRotationY(-XM_PIDIV2));
-		// 面向上面，向 z 轴旋转 -90° (对于正面朝上的特殊方块，相当于旋转到左面)
-		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[4], XMMatrixRotationZ(-XM_PIDIV2));
-		// 面向下面，向 z 轴旋转 90° (对于正面朝上的特殊方块，相当于旋转到右面)
-		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[5], XMMatrixRotationZ(XM_PIDIV2));
-		// 对于正面朝上的特殊方块，向 x 轴旋转 -90° 面向前面
-		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[6], XMMatrixRotationX(-XM_PIDIV2));
-		// 对于正面朝上的特殊方块，向 x 轴旋转 90° 面向后面
-		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[7], XMMatrixRotationX(XM_PIDIV2));
-		// 对于正面朝上的特殊方块，向 y 轴旋转 180° 翻转到下面
-		XMStoreFloat4x4(&m_ConstantBuffer->BlockFaceForwardMatrix[8], XMMatrixRotationX(XM_PI));
-	}
-
-
-
 	// ---------------------------------------------------------------------------------------------------------------
 
 
 
-	// 更新常量缓冲区，将每帧新的常量数据传递到常量缓冲区中，这样就能看到动态的 3D 画面了
+	// 第 13、14、18 章的 GetTickCount64 精度太低了，精度只有毫秒级
+	// 我们需要换上新的 QueryPerformanceCounter 高分辨率计时器进行微秒级计数
+	// 用于计算并转换 高分辨率计时器下 两个时间刻相隔的时间 (单位：秒)
+	inline double GetPerformaceCounterDiffTime(LARGE_INTEGER beg, LARGE_INTEGER end)
+	{
+		return static_cast<double>(end.QuadPart - beg.QuadPart) / CounterFrequency.QuadPart;
+	}
+
+
+
+	// 创建破坏方块产生的粒子效果，并将粒子效果上传到 m_SpawnParticlesList
+	void DestroyParticlesEffect(UINT FaceIndex, UINT DestroyType)
+	{
+		// 根据 DestroyType 破坏类型确定具体的粒子效果
+		switch (DestroyType)
+		{
+			// 目标方块正在破坏，在对应的方块面随机生成新粒子，并控制上传数量
+			case 0:
+			{
+				if (SpawnParticlesCount <= 16)
+				{
+					// 目标破坏方块中心的坐标
+					XMFLOAT3 BlockPosition = BlockGroup[DestroyInstanceIndex].BlockOffset;
+					// 目标破坏方块的类型
+					UINT BlockType = BlockGroup[DestroyInstanceIndex].BlockType;
+
+					// 随机生成 2-4 个新粒子，速度，相对方块面上的坐标随机
+					std::uniform_int_distribution<int> RandomParticleList(2, 4);
+					std::uniform_real_distribution<float> RandomFaceOffset(-0.1, 0.1);
+					std::uniform_real_distribution<float> RandomFacePlaneOffset(-0.5, 0.5);
+					std::uniform_real_distribution<float> RandomUnsignedVelocity(0, 0.1);
+					std::uniform_real_distribution<float> RandomSignedVelocity(-0.1, 0.1);
+					std::uniform_real_distribution<float> RandomLife(0.5, 1.2);
+
+					// 随机粒子数 (整数)，范围 [2, 4]
+					int RandomParticleNums = RandomParticleList(RandomSeed);
+					// 先清空 SpawnParticlesList
+					SpawnParticleList.clear();
+
+					// 生成 2-4 个随机粒子
+					for (int i = 0; i < RandomParticleNums; i++)
+					{
+						// 新粒子
+						Particle NewParticle = {};
+						NewParticle.BlockType = BlockType;
+						NewParticle.Life = RandomLife(RandomSeed);
+
+						// 根据射线击中的最近面，随机生成相应的粒子
+						switch (FaceIndex)
+						{
+							case 0:		// 右面 (+X)
+							{
+								NewParticle.Position = BlockPosition;
+								NewParticle.Position.x += (0.5 + RandomFaceOffset(RandomSeed));
+								NewParticle.Position.y += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Position.z += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Velocity.x = RandomUnsignedVelocity(RandomSeed);
+								NewParticle.Velocity.y = RandomSignedVelocity(RandomSeed);
+								NewParticle.Velocity.z = RandomSignedVelocity(RandomSeed);
+							}
+							break;
+
+							case 1:		// 左面 (-X)
+							{
+								NewParticle.Position = BlockPosition;
+								NewParticle.Position.x -= (0.5 + RandomFaceOffset(RandomSeed));
+								NewParticle.Position.y += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Position.z += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Velocity.x = -RandomUnsignedVelocity(RandomSeed);
+								NewParticle.Velocity.y = RandomSignedVelocity(RandomSeed);
+								NewParticle.Velocity.z = RandomSignedVelocity(RandomSeed);
+							}
+							break;
+
+							case 2:		// 前面 (+Z)
+							{
+								NewParticle.Position = BlockPosition;
+								NewParticle.Position.x += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Position.y += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Position.z += (0.5 + RandomFaceOffset(RandomSeed));
+								NewParticle.Velocity.x = RandomSignedVelocity(RandomSeed);
+								NewParticle.Velocity.y = RandomSignedVelocity(RandomSeed);
+								NewParticle.Velocity.z = RandomUnsignedVelocity(RandomSeed);
+							}
+							break;
+
+							case 3:		// 后面 (-Z)
+							{
+								NewParticle.Position = BlockPosition;
+								NewParticle.Position.x += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Position.y += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Position.z -= (0.5 + RandomFaceOffset(RandomSeed));
+								NewParticle.Velocity.x = RandomSignedVelocity(RandomSeed);
+								NewParticle.Velocity.y = RandomSignedVelocity(RandomSeed);
+								NewParticle.Velocity.z = -RandomUnsignedVelocity(RandomSeed);
+							}
+							break;
+
+							case 4:		// 上面 (+Y)
+							{
+								NewParticle.Position = BlockPosition;
+								NewParticle.Position.x += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Position.y += (0.5 + RandomFaceOffset(RandomSeed));
+								NewParticle.Position.z += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Velocity.x = RandomSignedVelocity(RandomSeed);
+								NewParticle.Velocity.y = RandomUnsignedVelocity(RandomSeed);
+								NewParticle.Velocity.z = RandomSignedVelocity(RandomSeed);
+							}
+							break;
+
+							case 5:		// 下面 (-Y)
+							{
+								NewParticle.Position = BlockPosition;
+								NewParticle.Position.x += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Position.y -= (0.5 + RandomFaceOffset(RandomSeed));
+								NewParticle.Position.z += RandomFacePlaneOffset(RandomSeed);
+								NewParticle.Velocity.x = RandomSignedVelocity(RandomSeed);
+								NewParticle.Velocity.y = -RandomUnsignedVelocity(RandomSeed);
+								NewParticle.Velocity.z = RandomSignedVelocity(RandomSeed);
+							}
+							break;
+						}
+
+						// 将新粒子添加到 SpawnParticlesList 中
+						SpawnParticleList.push_back(NewParticle);
+					}
+
+
+					// 更新 SpawnParticlesList 中新粒子的数量
+					SpawnParticlesCount = SpawnParticleList.size();
+					// 将 vector 的数据复制到上传堆资源中
+					memcpy(m_ReadySpawnParticlesListPointer, &SpawnParticleList[0],
+						SpawnParticlesCount * sizeof(Particle));
+				}
+			}
+			break;
+
+			// 目标方块破坏完成，在方块中心创建并上传大量粒子
+			case 1:
+			{
+				// 目标破坏方块中心的坐标
+				XMFLOAT3 BlockPosition = BlockGroup[DestroyInstanceIndex].BlockOffset;
+				// 目标破坏方块的类型
+				UINT BlockType = BlockGroup[DestroyInstanceIndex].BlockType;
+
+
+				// 随机生成 26-36 个新粒子，速度，相对方块面上的坐标随机
+				std::uniform_int_distribution<int> RandomParticleList(26, 36);
+				std::uniform_real_distribution<float> RandomBlockOffset(-0.5, 0.5);
+				std::uniform_real_distribution<float> RandomSignedVelocity(-0.1, 0.1);
+				std::uniform_real_distribution<float> RandomLife(0.5, 1.2);
+
+
+				// 随机粒子数 (整数)，范围 [26, 36]
+				int RandomParticleNums = RandomParticleList(RandomSeed);
+				// 先清空 SpawnParticlesList
+				SpawnParticleList.clear();
+
+				// 在方块中心附近生成随机粒子
+				for (int i = 0; i < RandomParticleNums; i++)
+				{
+					// 新粒子
+					Particle NewParticle = {};
+					NewParticle.BlockType = BlockType;
+					NewParticle.Life = RandomLife(RandomSeed);
+					NewParticle.Position = BlockPosition;
+					NewParticle.Position.x += RandomBlockOffset(RandomSeed);
+					NewParticle.Position.y += RandomBlockOffset(RandomSeed);
+					NewParticle.Position.z += RandomBlockOffset(RandomSeed);
+					NewParticle.Velocity.x += RandomSignedVelocity(RandomSeed);
+					NewParticle.Velocity.y += RandomSignedVelocity(RandomSeed);
+					NewParticle.Velocity.z += RandomSignedVelocity(RandomSeed);
+
+					// 添加新粒子
+					SpawnParticleList.push_back(NewParticle);
+				}
+
+				// 更新 SpawnParticlesList 中新粒子的数量
+				SpawnParticlesCount = SpawnParticleList.size();
+				// 将 vector 的数据复制到上传堆资源中
+				memcpy(m_ReadySpawnParticlesListPointer, &SpawnParticleList[0],
+					SpawnParticlesCount * sizeof(Particle));
+			}
+			break;
+		}
+	}
+
+
+
+	// 如果鼠标左键按下，就进行屏幕射线相交检测，检测到目标就破坏方块，并在目标方块周围产生粒子效果
+	void DestroyBlock()
+	{
+		// 先进行屏幕射线相交检测，查看射线是否远离方块，如果索引相同就更新破坏阶段，不同就立即重置
+
+		UINT FaceIndex = -1;									// 射线击中的最近表面
+		UINT CurrentHitBlockIndex = ScreenRaycast(&FaceIndex);	// 当前破坏的方块索引
+
+		// 如果射线没有击中任何方块，或者击中的是基岩，立即重置破坏状态
+		if (CurrentHitBlockIndex == -1 || BlockGroup[CurrentHitBlockIndex].BlockType == 0)
+		{
+			// 重置方块索引
+			DestroyInstanceIndex = -1;
+			// 重置破坏阶段纹理索引
+			DestroyStageIndex = -1;
+		}
+
+		// 如果射线击中了方块，但不是当前实例，立即重置破坏状态，新方块从阶段 0 开始
+		else if (CurrentHitBlockIndex != DestroyInstanceIndex)
+		{
+			// 重置方块索引为新方块
+			DestroyInstanceIndex = CurrentHitBlockIndex;
+			// 重置计时器
+			QueryPerformanceCounter(&BeginDestroyRecordedTick);
+			QueryPerformanceCounter(&CurrentDestroyTick);
+			// 重置破坏阶段纹理索引至阶段 0
+			DestroyStageIndex = 18;
+			// 更新常量缓冲
+			m_ConstantBuffer->DestroyStage = DestroyStageIndex;
+
+			// 产生少量破坏粒子效果
+			DestroyParticlesEffect(FaceIndex, 0);
+		}
+
+		// 如果破坏的仍然是当前方块实例，更新方块破坏状态
+		else
+		{
+			// 更新当前计时
+			QueryPerformanceCounter(&CurrentDestroyTick);
+			// 计算破坏阶段的纹理索引，一共 10 副纹理，每幅纹理 0.2 秒 = 200 毫秒
+			// 这里我们固定除了基岩，破坏方块都是 2s，读者们掌握后可以查 MC wiki 自由拓展
+			// 18 是破坏纹理在 TextureGroup 的基础索引
+			DestroyStageIndex = 
+				18 + GetPerformaceCounterDiffTime(BeginDestroyRecordedTick, CurrentDestroyTick) * 5;
+			// 更新当前破坏阶段索引到常量缓冲，我们需要在 DestroyStageShader.hlsl 上采样破坏纹理
+			m_ConstantBuffer->DestroyStage = DestroyStageIndex;
+
+
+			// 如果计算后索引 > 27，说明已经达到 2s，目标方块破坏完成
+			// 移除这个方块，重置破坏状态，更新脏数据标志，下面将进行新一轮数据更新
+			if (DestroyStageIndex > 27)
+			{
+				// 先在方块中心产生大量破坏粒子效果
+				DestroyParticlesEffect(FaceIndex, 1);
+
+				// 再删除 vector 迭代器指代的实例对象 (目标方块)
+				BlockGroup.erase(BlockGroup.begin() + DestroyInstanceIndex);
+
+				DestroyInstanceIndex = -1;	// 重置破坏实例索引
+				DestroyStageIndex = -1;		// 重置破坏阶段索引
+				isDirtyData = true;			// 数据更新标志设 true
+			}
+			else
+			{
+				// 产生少量破坏粒子效果
+				DestroyParticlesEffect(FaceIndex, 0);
+			}
+		}
+	}
+
+
+
+	// 更新并回读每帧的数据，将每帧新的常量数据传递到常量缓冲区中，这样就能看到动态的 3D 画面了
 	// 在这里处理方块破坏逻辑，WM_LBUTTONDOWN 仅负责更新标志，不负责任何破坏逻辑，因为它的事都被 UpdateConstantBuffer 做了
 	// WM_RBUTTONDOWN 不仅要更新标志，还需要立即重置破坏相关的变量，这样可以减少 UpdateConstantBuffer 的判断与命令执行次数
-	void UpdateConstantBuffer()
+	void UpdateFrameBuffer()
 	{
 		// 将更新后的矩阵，存储到共享内存上的常量缓冲，这样 GPU 就可以访问到 MVP 矩阵了
 		XMStoreFloat4x4(&m_ConstantBuffer->MVPMatrix, m_FirstCamera.GetMVPMatrix());
 
 
-		// 鼠标左键处于按下状态，就进行碰撞检测，这样可以为持续化破坏做铺垫，另外也可以减少 ScreenRaycast 调用次数
+		// 表示 m_UAVStackTopPointer_ReadbackResource 整个数据范围的 Range 结构体变量
+		D3D12_RANGE ReadbackRange = { 0, 4 };
+
+		// 我们每帧都要从显存中回读数据，上一帧的资源已经复制完成了，4 字节的 Map-Unmap 复制开销是可以忽略的
+		m_UAVStackTopPointer_ReadbackResource->Map(0, &ReadbackRange,
+			reinterpret_cast<void**>(&m_StackTop_ReadbackPointer));
+
+		// 从回读堆中读取当前活跃粒子数
+		CurrentActiveParticlesNums = *m_StackTop_ReadbackPointer;
+		
+		// 结束映射
+		m_UAVStackTopPointer_ReadbackResource->Unmap(0, nullptr);
+
+
+		// 如果鼠标左键按下，就执行 DestroyBlock
 		if (isLeftButtonPressDown)
 		{
-			// 先进行屏幕射线相交检测，查看射线是否远离方块，如果索引相同就更新破坏阶段，不同就立即重置
-
-			UINT CurrentHitBlockIndex = ScreenRaycast();	// 当前破坏的方块索引
-
-			// 如果射线没有击中任何方块，或者击中的是基岩，立即重置破坏状态
-			if (CurrentHitBlockIndex == -1 || BlockGroup[CurrentHitBlockIndex].BlockType == 0)
-			{
-				// 重置方块索引
-				DestroyInstanceIndex = -1;
-				// 重置破坏阶段纹理索引
-				DestroyStageIndex = -1;
-			}
-
-			// 如果射线击中了方块，但不是当前实例，立即重置破坏状态，新方块从阶段 0 开始
-			else if (CurrentHitBlockIndex != DestroyInstanceIndex)
-			{
-				// 重置方块索引为新方块
-				DestroyInstanceIndex = CurrentHitBlockIndex;
-				// 重置计时器
-				BeginDestroyRecordedTick = CurrentDestroyTick = GetTickCount64();
-				// 重置破坏阶段纹理索引至阶段 0
-				DestroyStageIndex = 40;
-				// 更新常量缓冲
-				m_ConstantBuffer->DestroyStage = DestroyStageIndex;
-			}
-
-			// 如果破坏的仍然是当前方块实例，更新方块破坏状态
-			else
-			{
-				// 更新当前计时，这个计时器精度不高，所以你会看见方块破坏不止 1 秒
-				// 读者学会用 GetTickCount64 计时之后，就可以自行查阅资料，学更高精度的计时器了，加油！
-				CurrentDestroyTick = GetTickCount64();
-				// 计算破坏阶段的纹理索引，一共 10 副纹理，每幅纹理 0.1 秒 = 100 毫秒
-				// 这里我们固定除了基岩，破坏方块都是 1s，读者们掌握后可以查 MC wiki 自由拓展
-				// 40 是破坏纹理在 TextureGroup 的基础索引
-				DestroyStageIndex = 40 + (CurrentDestroyTick - BeginDestroyRecordedTick) / 100;
-				// 更新当前破坏阶段索引到常量缓冲，我们需要在 DestroyStageShader.hlsl 上采样破坏纹理
-				m_ConstantBuffer->DestroyStage = DestroyStageIndex;
-
-
-				// 如果计算后索引 > 50，说明已经达到 1s，目标方块破坏完成
-				// 移除这个方块，重置破坏状态，更新脏数据标志，下面将进行新一轮数据更新
-				if (DestroyStageIndex > 50)
-				{
-					// 删除 vector 迭代器指代的实例对象 (目标方块)
-					BlockGroup.erase(BlockGroup.begin() + DestroyInstanceIndex);
-
-					DestroyInstanceIndex = -1;	// 重置破坏实例索引
-					DestroyStageIndex = -1;		// 重置破坏阶段索引
-					isDirtyData = true;			// 数据更新标志设 true
-				}
-			}
+			DestroyBlock();
 		}
 
 
@@ -3057,8 +4064,8 @@ public:
 	// 渲染
 	void Render()
 	{
-		// 先更新常量缓冲区，否则方块会渲染到不可见位置
-		UpdateConstantBuffer();
+		// 每帧渲染开始前，调用 UpdateFrameBuffer() 更新每帧数据
+		UpdateFrameBuffer();
 
 
 		// 获取 RTV 堆首句柄
@@ -3069,23 +4076,123 @@ public:
 		RTVHandle.ptr += FrameIndex * RTVDescriptorSize;
 
 
-		// 记录 3D 渲染命令，并提交给 CommandQueue
+		// 先重置命令分配器
+		m_CommandAllocator->Reset();
+		// 再重置命令列表，Close 关闭状态 -> Record 录制状态
+		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);
+
+
+		// 计算着色器新增并更新粒子
 		{
-			// 先重置命令分配器
-			m_CommandAllocator->Reset();
-			// 再重置命令列表，Close 关闭状态 -> Record 录制状态
-			m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);
+			// 用于设置 m_ComputeUAVSRVHeap 用的临时 ID3D12DescriptorHeap 数组
+			ID3D12DescriptorHeap* _temp_ComputeHeaps[] = { m_ComputeUAVSRVHeap.Get() };
+			// 设置计算着色器需要用到的 m_ComputeUAVSRVHeap，这个指令会向 GPU 传递并绑定描述符堆的基地址
+			// 这个指令是一个开销比较大的指令，官方建议一帧只调用一次或两次，所以鼓励资源与描述符复用
+			// 并且同类型 Heap 一次最多只能设置一个：CBV/SRV/UAV 类型一个，Sampler 类型一个
+			m_CommandList->SetDescriptorHeaps(1, _temp_ComputeHeaps);
+
+			// 第二次设置根签名，本次检测 PSO 根签名的合法性 (引用资源是否匹配)，检测成功会开启显存与寄存器的映射通道
+			// 注意！这里是 SetComputeRootSignature 版本的！下文这一整个代码块涉及到资源绑定都是 Compute 版本！
+			m_CommandList->SetComputeRootSignature(m_ComputeParticleRootSignature.Get());
+
+
+			// 如果 m_SpawnParticlesList 有新粒子，记录计算着色器生成新粒子的命令
+			{
+				// 如果 m_SpawnParticlesList 待生成列表不为空，说明有新粒子，准备上传到 SpawnCSMain
+				if (SpawnParticlesCount != 0)
+				{
+					// 设置 SpawnCSMain 的渲染管线状态
+					m_CommandList->SetPipelineState(m_ComputeSpawnParticlePSO.Get());
+
+					// 设置第一个根参数：SpawnParticlesCount 待生成列表的粒子数量
+					m_CommandList->SetComputeRoot32BitConstant(0, SpawnParticlesCount, 0);
+
+					// 设置第三个根参数：粒子缓冲、空闲栈、栈顶指针、待生成列表
+					// 借助根描述表 + 描述符堆按顺序排列描述符，就可以一次性快速绑定多个描述符到管线中
+					m_CommandList->SetComputeRootDescriptorTable(2, ComputeUAVSRVHeap_GPUBaseHandle);
+
+					// 计算新粒子总共需要的线程组数
+					UINT NeedDispatchThreadGroupNum = Ceil(SpawnParticlesCount, 16);
+
+					// 调度线程组，开始添加粒子！
+					m_CommandList->Dispatch(NeedDispatchThreadGroupNum, 1, 1);
+
+
+					// 注意这里！还需要进行一次 UAV 屏障转换！(详情见 STEP26_CreateParticlesBufferBarrier)
+					// 否则下面 UpdateCSMain 可能会沿用旧的 UAV 资源数据 (两个计算着色器共享了部分 UAV 资源)
+					m_CommandList->ResourceBarrier(3, UAVDispatch_barrier);
+
+					// 上传完新粒子后，将 SpawnParticlesCount 清 0
+					SpawnParticlesCount = 0;
+				}
+			}
+
+
+			// 如果 m_ParticlesBuffer 仍然有存活粒子 (不管玩家是否有破坏行为)，记录计算着色器更新粒子的命令
+			{
+				// 如果仍然有存活粒子，启动 UpdateCSMain 进行更新
+				if (CurrentActiveParticlesNums != 0)
+				{
+					// 设置 UpdateCSMain 的渲染管线状态
+					m_CommandList->SetPipelineState(m_ComputeUpdateParticlePSO.Get());
+
+					// 先更新当前帧时间
+					QueryPerformanceCounter(&CurrentFrameTick);
+					// 计算每帧过去的时间 (当前帧 - 上一帧)
+					float ElapsedTime =
+						static_cast<float>(GetPerformaceCounterDiffTime(LastFrameTick, CurrentFrameTick));
+					// 再更新上一帧时间
+					QueryPerformanceCounter(&LastFrameTick);
+
+
+					// 设置第二个根参数：每帧过去的时间，粒子重力，粒子缓冲最大分配容量
+					// 注意第三个参数是要设置的常量值所在根参数的位置 (索引)
+					// 小心！第二个参数是 UINT，直接把 float 传进去会发生隐式转换，丢失小数部分！
+					// 我们需要使用 reinterpret_cast 进行二进制位的重新解释 (强制转换)，这样就不会发生小数截断了
+					m_CommandList->SetComputeRoot32BitConstant(1,
+						*reinterpret_cast<UINT*>(&ElapsedTime), 0);
+
+					// 设置粒子重力，也要 reinterpret_cast 强制转换
+					m_CommandList->SetComputeRoot32BitConstant(1,
+						*reinterpret_cast<const UINT*>(&GravityData), 1);
+
+					// 设置粒子缓冲最大分配容量
+					m_CommandList->SetComputeRoot32BitConstant(1, MaxAllocParticlesNums, 2);
+
+
+					// 设置第三个根参数：粒子缓冲、空闲栈、栈顶指针、待生成列表
+					// 借助根描述表 + 描述符堆按顺序排列描述符，就可以一次性快速绑定多个描述符到管线中
+					m_CommandList->SetComputeRootDescriptorTable(2, ComputeUAVSRVHeap_GPUBaseHandle);
+
+
+					// 计算新粒子总共需要的线程组数
+					UINT NeedDispatchThreadGroupNum = Ceil(MaxAllocParticlesNums, 16);
+
+					// 调度线程组，开始添加粒子！
+					m_CommandList->Dispatch(NeedDispatchThreadGroupNum, 1, 1);
+
+
+					// 注意这里！当计算完成后，我们等会就要将粒子缓冲区挪入渲染管线做 SRV Resource
+					// 顶点着色器直接访问 UAV 资源是未定义行为，大部分硬件普遍不支持的
+					// 所以还需要将 UAV 资源转换到 SRV 资源，配合上面在 m_RenderSRVHeap 创建的第二个描述符来渲染
+					m_CommandList->ResourceBarrier(1, &UAVToSRV_barrier);
+				}
+			}
+		}
+
+
+		// 渲染方块、粒子以及破坏纹理
+		{
+			// 将起始转换屏障的资源指定为当前渲染目标
+			beg_barrier.Transition.pResource = m_D3D12RenderTarget[FrameIndex].Get();
+			// 先对渲染目标设置 Present -> Render Target 的资源屏障
+			m_CommandList->ResourceBarrier(1, &beg_barrier);
+
 
 			// 设置视口 (光栅化阶段)，用于光栅化里的屏幕映射
 			m_CommandList->RSSetViewports(1, &ViewPort);
 			// 设置裁剪矩形 (光栅化阶段)
 			m_CommandList->RSSetScissorRects(1, &ScissorRect);
-
-			// 将起始转换屏障的资源指定为当前渲染目标
-			beg_barrier.Transition.pResource = m_D3D12RenderTarget[FrameIndex].Get();
-			// 调用资源屏障，将渲染目标由 Present 呈现(只读) 转换到 RenderTarget 渲染目标(只写)
-			m_CommandList->ResourceBarrier(1, &beg_barrier);
-
 
 
 			// 用 RTV 句柄设置渲染目标，同时用 DSV 句柄设置深度模板缓冲，开启深度测试
@@ -3099,66 +4206,102 @@ public:
 			m_CommandList->ClearDepthStencilView(DSVHandle, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
 
 
+			// 用于设置 m_RenderSRVHeap 用的临时 ID3D12DescriptorHeap 数组
+			ID3D12DescriptorHeap* _temp_RenderHeaps[] = { m_RenderSRVHeap.Get() };
+			// 设置渲染需要用到的 m_RenderSRVHeap
+			m_CommandList->SetDescriptorHeaps(1, _temp_RenderHeaps);
 
 			// 第二次设置根签名，本次检测 PSO 根签名的合法性 (引用资源是否匹配)，检测成功会开启显存与寄存器的映射通道
-			m_CommandList->SetGraphicsRootSignature(m_RootSignature.Get());
+			// 注意！这里是 SetGraphicsRootSignature 版本的！下文这一整个代码块涉及到资源绑定都是 Graphics 版本！
+			m_CommandList->SetGraphicsRootSignature(m_RenderRootSignature.Get());
 
-			// 设置 PSO 渲染管线状态
-			m_CommandList->SetPipelineState(m_RenderBlockPSO.Get());
-
-			// 设置第一个根参数：CBV 描述符 (MVP 缓冲)
+			// 设置第一个根参数：CBV 常量缓冲 (GlobalData)
 			m_CommandList->SetGraphicsRootConstantBufferView(0, m_CBVResource->GetGPUVirtualAddress());
-
-			// 设置第二个根参数：SRV 根描述符 (结构化缓冲)，注意这里设置的是默认堆资源的 GPU 地址！
-			m_CommandList->SetGraphicsRootShaderResourceView(1, m_StructuredBufferDefaultResource->GetGPUVirtualAddress());
-
-			// 用于设置描述符堆用的临时 ID3D12DescriptorHeap 数组
-			ID3D12DescriptorHeap* _temp_DescriptorHeaps[] = { m_SRVHeap.Get() };
-			// 设置描述符堆
-			m_CommandList->SetDescriptorHeaps(1, _temp_DescriptorHeaps);
-
-			// 设置 SRV 句柄 (第三个根参数)，我们设置了一个纹理数组，切换纹理索引都在 shader 中进行
+			// 设置第二个根参数：SRV 结构化缓冲区 (BlockCubeTexture_IndexGroup)
+			m_CommandList->SetGraphicsRootShaderResourceView(1, m_StructuredBuffer_DefaultResource->GetGPUVirtualAddress());
+			// 设置第三个根参数：SRV 纹理数组 + 粒子缓冲区，通过根描述表与描述符堆上的排列，提供基地址就能连续绑定
 			m_CommandList->SetGraphicsRootDescriptorTable(2, SRVTextureArray_GPUHandle);
 
 
-
-			// 设置图元拓扑 (输入装配阶段)，我们这里设置三角形列表
-			m_CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-			// 设置 VBV 顶点缓冲描述符数组，两个 VBV 都会被设置 (输入装配阶段) 
-			m_CommandList->IASetVertexBuffers(0, 2, VertexBufferView);
-
-			// 设置 IBV 索引缓冲描述符 (输入装配阶段) 
-			m_CommandList->IASetIndexBuffer(&IndexBufferView);
-
-			// Draw Call 一次渲染所有目标实例！
-			m_CommandList->DrawIndexedInstanced(PreBlockIndexData.size(), BlockGroup.size(), 0, 0, 0);
-
-
-			// 如果某个方块正在被破坏 (DestroyInstanceIndex != -1)，就对这个方块绘制相应的破坏纹理
-			if (DestroyInstanceIndex != -1)
+			// 渲染方块
 			{
-				// 切换对应的 PSO
-				m_CommandList->SetPipelineState(m_DestroyStagePSO.Get());
+				// 设置渲染方块的 PSO
+				m_CommandList->SetPipelineState(m_RenderBlockPSO.Get());
 
-				// 绘制破坏纹理 (实际上是又套了一层表面是破坏纹理的方块)
-				m_CommandList->DrawIndexedInstanced(PreBlockIndexData.size(), 1, 0, 0, DestroyInstanceIndex);
+				// 设置图元拓扑 (输入装配阶段)，我们这里设置三角形列表
+				m_CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+				// 设置 VBV 顶点缓冲描述符数组，两个 VBV 都会被设置 (输入装配阶段) 
+				m_CommandList->IASetVertexBuffers(0, 2, VertexBufferView);
+
+				// 设置 IBV 索引缓冲描述符 (输入装配阶段) 
+				m_CommandList->IASetIndexBuffer(&IndexBufferView);
+
+				// Draw Call 渲染所有目标实例！
+				m_CommandList->DrawIndexedInstanced(PreBlockIndexData.size(), BlockGroup.size(), 0, 0, 0);
 			}
 
 
+			// 渲染粒子
+			{
+				// 如果仍然有活跃粒子，就渲染
+				if (CurrentActiveParticlesNums != 0)
+				{
+					// 设置渲染粒子的 PSO
+					m_CommandList->SetPipelineState(m_RenderParticlePSO.Get());
 
-			// 关闭命令列表，Record 录制状态 -> Close 关闭状态，命令列表只有关闭才可以提交
-			m_CommandList->Close();
+					// 渲染粒子缓冲区下的所有粒子 (不管粒子是否存活、死亡或未使用，对应的 shader 会处理的)
+					m_CommandList->DrawIndexedInstanced(PreBlockIndexData.size(), MaxAllocParticlesNums, 0, 0, 0);
 
-			// 用于传递命令用的临时 ID3D12CommandList 数组
-			ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
 
-			// 执行上文的渲染命令！
-			m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
+					// 注意这里！渲染完成后需要再对粒子缓冲区资源进行一次 SRVToUAV 的屏障转换！这样下一帧计算着色器才能继续使用！
+					m_CommandList->ResourceBarrier(1, &SRVToUAV_barrier);
+				}
+			}
+
+
+			// 渲染目标方块的破坏纹理
+			{
+				// 如果某个方块正在被破坏 (DestroyInstanceIndex != -1)，就对这个方块绘制相应的破坏纹理
+				if (DestroyInstanceIndex != -1)
+				{
+					// 设置渲染破坏纹理的 PSO
+					m_CommandList->SetPipelineState(m_DestroyStagePSO.Get());
+
+					// 绘制破坏纹理 (实际上是又套了一层表面是破坏纹理的方块)
+					m_CommandList->DrawIndexedInstanced(PreBlockIndexData.size(), 1, 0, 0, DestroyInstanceIndex);
+				}
+			}
 		}
 
 
+		// 每帧末尾，进行活跃粒子数量的回读
+		{
+			// 先转换到 Copy Source 复制源状态
+			m_CommandList->ResourceBarrier(1, &UAVToCopySource_barrier);
+
+			// 最后，每帧的末尾还要实时获取活跃粒子的数量，如果实时检测到还有活跃粒子，提示下一帧进行粒子计算与渲染
+			// 这样可以避免粒子缓冲区没有活跃粒子，GPU 频繁调用线程组进行计算的不必要开销
+			m_CommandList->CopyBufferRegion(m_UAVStackTopPointer_ReadbackResource.Get(), 0,
+				m_UAVStackTopPointer_DefaultResource.Get(), 0, 4);
+
+			// 再转换到 Unordered Access 无序访问状态
+			m_CommandList->ResourceBarrier(1, &CopySourceToUAV_barrier);
+		}
+
+		
+		// 关闭命令列表，Record 录制状态 -> Close 关闭状态，命令列表只有关闭才可以提交
+		m_CommandList->Close();
+
+		// 用于传递命令用的临时 ID3D12CommandList 数组
+		ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
+
+		// 执行上文的渲染命令！
+		m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
+
+
 		// 向 GPU 提交完 3D 渲染命令后，CPU 准备记录 2D 渲染指令
+		// 注意 D2D 归还渲染目标的使用权，还会自动插入一道 Render Target -> Present 的屏障
 		m_D2DEngine.D2DUIRender(FrameIndex, WindowWidth, WindowHeight);
 
 
@@ -3181,7 +4324,7 @@ public:
 
 
 	// 渲染循环
-	void STEP27_RenderLoop()
+	void STEP35_RenderLoop()
 	{
 		bool isExit = false;	// 是否退出
 		MSG msg = {};			// 消息结构体
@@ -3237,47 +4380,13 @@ public:
 
 
 
-	// Minecraft 中的方块放置/破坏涉及到 屏幕空间 -> 世界空间 的逆变换
-	// 这类转换是许多 3D 游戏中的常见需求，它们有一个专有名词：ScreenSpaceRaycast 屏幕射线相交检测
-	// 你在屏幕上点一个点，把这个点与摄像机原点连起来，会形成一条摄像机到这个点的射线：ScreenRay 屏幕射线
-	// 这条射线沿途可能会穿过几何体 (相交)，也可能擦身而过 (相切)，更有可能相距甚远 (相离)
-	// 把点从屏幕空间变换到世界空间，与摄像机形成的屏幕射线依次与几何体相交，逐一检测它们的几何关系，这就叫"屏幕射线相交检测"
-	// 我们要检测屏幕射线在一定范围内是否有方块相交，如果有，就在最近的方块上进行放置/破坏 (放置要考虑面朝向，破坏要考虑时间)
-
-
 	// 对 BlockGroup 的所有方块进行屏幕射线碰撞检测，如果测试通过，说明有方块正被放置/破坏
 	// 测试通过，返回最近的目标方块索引；测试不通过，返回 -1
 	// 破坏方向跟随十字准星，十字准心在窗口中央，NDC 空间坐标为 (0, 0)，摄像机向准星方向在世界空间发射射线
-	// FaceIndex 是一个额外的输出参数，输出射线碰到最近一个面的索引 (0-5 右左前后上下)，如果不需要可以不填
+	// FaceIndex 是一个额外的输出参数，输出射线碰到最近一个面的索引 (0-5 右左前后上下)
 	UINT ScreenRaycast(UINT* FaceIndex = nullptr)
 	{
-		/*
-			// 屏幕射线生成：当鼠标点击 (左键/右键) 时，生成一条从摄像机出发的射线
-		
-			// 先获取屏幕空间下鼠标点击的坐标
-			float ScreenSpaceClick_x = LOWORD(lParam);
-			float ScreenSpaceClick_y = HIWORD(lParam);
-		
-			// 再转化成 NDC 空间下点击的坐标 [-1,1]
-			// 2 * (S - W / 2) / W = 2 * S / W - 1
-			float NDCSpaceClick_x = 2 * ScreenSpaceClick_x / WindowWidth - 1;
-			// - 2 * (S - H / 2) / H = 1 - 2 * S / H，窗口坐标系的 y 轴方向和 DX 坐标系相反，需要取负反转
-			float NDCSpaceClick_y = 1 - 2 * ScreenSpaceClick_y / WindowHeight;
-
-			// 齐次裁剪空间下远平面的点，注意 z 坐标是 1 (变换到齐次裁剪空间会进行深度归一化)
-			XMVECTOR ClipSpaceFarPoint = XMVectorSet(NDCSpaceClick_x, NDCSpaceClick_y, 1, 1);
-
-			// 依次变换这个最远点到世界空间 (齐次裁剪空间 -> 观察空间 -> 世界空间)
-			XMVECTOR WorldSpaceFarPoint = XMVector3TransformCoord(ClipSpaceFarPoint,
-			m_FirstCamera.GetInverseProjectionMatrix() * m_FirstCamera.GetInverseViewMatrix());
-
-			// 屏幕射线 = 最远点 - 摄像机原点 (世界空间)
-			XMVECTOR ScreenRay = WorldSpaceFarPoint - m_FirstCamera.GetEyePosition();
-		*/
-
-
 		// 由于十字准星永远固定在屏幕中心，玩家永远向着准星的方向进行破坏/放置，所以摄像机的观察向量就是屏幕射线
-		// 开了十字准星就意味着固定位置点击了，上面没使用的注释，可以用在手机这些移动端没开准星的情况，这个时候才要算射线
 		XMVECTOR ScreenRay = m_FirstCamera.GetViewDirection();
 		// 屏幕射线的起始点 (摄像机原点)
 		XMVECTOR RayOrigin = m_FirstCamera.GetEyePosition();
@@ -3374,27 +4483,20 @@ public:
 		// 摄像机原点
 		XMVECTOR RayOrigin = m_FirstCamera.GetEyePosition();
 
-		switch (FaceIndex)	
+		switch (FaceIndex)
 		{
 			case 0:		// 右面
 			{
 				NewBlockInstance.BlockOffset = BlockGroup[NearestPlacedBlockIndex].BlockOffset;
-				NewBlockInstance.BlockOffset.x += 2;
+				NewBlockInstance.BlockOffset.x += 1;
 				NewBlockInstance.BlockType = NewBlockType;
-				
+
 				// 根据方块类型，进行不同的处理
 				switch (NewBlockType)
 				{
-					case 7:		// 活塞
+					case 3:		// TNT
 					{
-						NewBlockInstance.RotateIndex = 5;	// 旋转到右面
-					}
-					break;
-
-					case 10:	// TNT
-					case 29:	// 石英块
-					{
-						// TNT 和石英块要统一到正面，不然太难看了...
+						// TNT 要统一到正面，不然太难看了...
 						NewBlockInstance.RotateIndex = 0;
 					}
 					break;
@@ -3413,22 +4515,15 @@ public:
 			case 1:		// 左面
 			{
 				NewBlockInstance.BlockOffset = BlockGroup[NearestPlacedBlockIndex].BlockOffset;
-				NewBlockInstance.BlockOffset.x -= 2;
+				NewBlockInstance.BlockOffset.x -= 1;
 				NewBlockInstance.BlockType = NewBlockType;
-				
+
 				// 根据方块类型，进行不同的处理
 				switch (NewBlockType)
 				{
-					case 7:		// 活塞
+					case 3:		// TNT
 					{
-						NewBlockInstance.RotateIndex = 4;	// 旋转到左面
-					}
-					break;
-
-					case 10:	// TNT
-					case 29:	// 石英块
-					{
-						// TNT 和石英块要统一到正面，不然太难看了...
+						// TNT 要统一到正面，不然太难看了...
 						NewBlockInstance.RotateIndex = 0;
 					}
 					break;
@@ -3447,22 +4542,15 @@ public:
 			case 2:		// 前面
 			{
 				NewBlockInstance.BlockOffset = BlockGroup[NearestPlacedBlockIndex].BlockOffset;
-				NewBlockInstance.BlockOffset.z += 2;
+				NewBlockInstance.BlockOffset.z += 1;
 				NewBlockInstance.BlockType = NewBlockType;
-				
+
 				// 根据方块类型，进行不同的处理
 				switch (NewBlockType)
 				{
-					case 7:		// 活塞
+					case 3:		// TNT
 					{
-						NewBlockInstance.RotateIndex = 6;	// 旋转到前面
-					}
-					break;
-
-					case 10:	// TNT
-					case 29:	// 石英块
-					{
-						// TNT 和石英块要统一到正面，不然太难看了...
+						// TNT 要统一到正面，不然太难看了...
 						NewBlockInstance.RotateIndex = 0;
 					}
 					break;
@@ -3481,22 +4569,15 @@ public:
 			case 3:		// 后面
 			{
 				NewBlockInstance.BlockOffset = BlockGroup[NearestPlacedBlockIndex].BlockOffset;
-				NewBlockInstance.BlockOffset.z -= 2;
+				NewBlockInstance.BlockOffset.z -= 1;
 				NewBlockInstance.BlockType = NewBlockType;
-				
+
 				// 根据方块类型，进行不同的处理
 				switch (NewBlockType)
 				{
-					case 7:		// 活塞
+					case 3:		// TNT
 					{
-						NewBlockInstance.RotateIndex = 7;	// 旋转到后面
-					}
-					break;
-
-					case 10:	// TNT
-					case 29:	// 石英块
-					{
-						// TNT 和石英块要统一到正面，不然太难看了...
+						// TNT 要统一到正面，不然太难看了...
 						NewBlockInstance.RotateIndex = 0;
 					}
 					break;
@@ -3515,30 +4596,16 @@ public:
 			case 4:		// 上面
 			{
 				NewBlockInstance.BlockOffset = BlockGroup[NearestPlacedBlockIndex].BlockOffset;
-				NewBlockInstance.BlockOffset.y += 2;
+				NewBlockInstance.BlockOffset.y += 1;
 				NewBlockInstance.BlockType = NewBlockType;
 
 				// 根据方块类型，进行不同的处理
 				switch (NewBlockType)
 				{
-					case 7:		// 活塞
+					case 3:		// TNT
 					{
-						NewBlockInstance.RotateIndex = 0;				// 无需旋转
-					}
-					break;
-
-					case 10:	// TNT
-					case 29:	// 石英块
-					{
-						// TNT 和石英块要统一到正面，不然太难看了...
+						// TNT 要统一到正面，不然太难看了...
 						NewBlockInstance.RotateIndex = 0;
-					}
-					break;
-
-					case 15:	// 水平发射器
-					{
-						NewBlockInstance.BlockType = NewBlockType + 1;	// 改变方块类型
-						NewBlockInstance.RotateIndex = 0;				// 无需旋转
 					}
 					break;
 
@@ -3568,30 +4635,16 @@ public:
 			case 5:		// 下面
 			{
 				NewBlockInstance.BlockOffset = BlockGroup[NearestPlacedBlockIndex].BlockOffset;
-				NewBlockInstance.BlockOffset.y -= 2;
+				NewBlockInstance.BlockOffset.y -= 1;
 				NewBlockInstance.BlockType = NewBlockType;
-				
+
 				// 根据方块类型，进行不同的处理
 				switch (NewBlockType)
 				{
-					case 7:		// 活塞
+					case 3:		// TNT
 					{
-						NewBlockInstance.RotateIndex = 8;				// 旋转到下面
-					}
-					break;
-
-					case 10:	// TNT
-					case 29:	// 石英块
-					{
-						// TNT 和石英块要统一到正面，不然太难看了...
+						// TNT 要统一到正面，不然太难看了...
 						NewBlockInstance.RotateIndex = 0;
-					}
-					break;
-
-					case 15:	// 水平发射器
-					{
-						NewBlockInstance.BlockType = NewBlockType + 1;	// 改变方块类型
-						NewBlockInstance.RotateIndex = 8;				// 旋转到下面
 					}
 					break;
 
@@ -3836,35 +4889,49 @@ public:
 		engine.STEP08_CreateDSVHeap();
 		engine.STEP09_CreateDepthStencilBuffer();
 		engine.STEP10_CreateDSV();
-		engine.STEP11_CreateCBVResource();
 
 
-		engine.STEP12_InitializeD2DEngine();
-		engine.STEP13_LoadImageAndTransform();
-		engine.STEP14_LoadAndGenerateBlockIcons();
+		engine.STEP11_InitializeD2DEngine();
+		engine.STEP12_LoadImageAndTransform();
+		engine.STEP13_LoadAndGenerateBlockIcons();
 
 
-		engine.STEP15_GetTextureArrayElementsProperties();
-		engine.STEP16_CreateTextureArrayResource();
-		engine.STEP17_CopyTextureArrayToDefaultResource();
-		engine.STEP18_CreateSRVHeap();
-		engine.STEP19_CreateTextureArraySRV();
+		engine.STEP14_GetTextureArrayElementsProperties();
+		engine.STEP15_CreateTextureArrayResource();
+		engine.STEP16_CopyTextureArrayToDefaultResource();
+		engine.STEP17_CreateSRVHeap();
+		engine.STEP18_CreateTextureArraySRV();
 
 
-		engine.STEP20_CreateStructuredBufferResource();
-		engine.STEP21_CopyStructuredBufferToDefaultResource();
+		engine.STEP19_CreateStructuredBufferResource();
+		engine.STEP20_CopyStructuredBufferToDefaultResource();
 
 
-		engine.STEP22_CreateRootSignature();
-		engine.STEP23_CreatePSO();
+		engine.STEP21_CreateParticleRequireResources();
+		engine.STEP22_ClearParticlesBuffer();
+		engine.STEP23_InitIdleParticlesStack();
+		engine.STEP24_ClearStackTopPointer();
 
 
-		engine.STEP24_CreatePerVertexAndIndexBuffer();
-		engine.STEP25_CreatePerInstanceBuffer();
-		engine.STEP26_CopyRotateMatrixToCBuffer();
+		engine.STEP25_CreateUAVSRVHeapAndDescriptor();
+		engine.STEP26_CreateComputeParticleRootSignature();
+		engine.STEP27_CreateComputeParticlePSO();
+		engine.STEP28_CreateParticlesBufferBarrier();
 
 
-		engine.STEP27_RenderLoop();
+		engine.STEP29_CreateCBVResource();
+		engine.STEP30_CopyRotateMatrixToCBuffer();
+
+
+		engine.STEP31_CreateRenderRootSignature();
+		engine.STEP32_CreateRenderPSO();
+
+
+		engine.STEP33_CreatePerVertexAndIndexBuffer();
+		engine.STEP34_CreatePerInstanceBuffer();
+
+
+		engine.STEP35_RenderLoop();
 	}
 };
 

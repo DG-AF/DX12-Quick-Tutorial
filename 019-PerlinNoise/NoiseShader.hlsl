@@ -32,7 +32,7 @@ float HashWithSeed(int2 position)
 	// HLSL 没有 cpp 端生成随机数的内置函数，我们需要自己写算法，在着色器中生成伪随机数
 	// (那个内置的 noise 函数在 HLSL 2.0 就被弃了，补全代码看到了也别用，绝大部分硬件都不支持它)
 	// 下面这几行算法叫"正弦哈希"，是一种在着色器中常见的伪随机数生成算法
-	// 它利用正弦函数的非线性特性，将一个二维坐标映射到一个看似随机的 [0,1) 范围内的浮点数
+	// 它利用正弦函数的非线性特性，将一个二维坐标映射到一个看似随机的 [0, 1) 范围内的浮点数
 	
 	// 下面 127.1，311.7，43758.5453 这些魔法数字最早流行于 ShaderToy (一个在线着色器编程社区)
 	// 当时 GPU 编程仍属新兴领域，开发者们需要在没有纹理或复杂算法的情况下快速生成随机数
@@ -142,7 +142,7 @@ float PerlinNoise(float2 GridPointPosition)
 	
 	
 	// 5.用上面的高阶平滑函数，计算采样点的小数部分对应的插值权重，这样就得到了平滑的曲线
-	// 注意是小数部分！用完整网格坐标会使平滑曲线函数的输入远大于预期的 [0,1] 范围，从而产生极大的噪声值，高度暴增
+	// 注意是小数部分！用完整网格坐标会使平滑曲线函数的输入远大于预期的 [0, 1) 范围，从而产生极大的噪声值，高度暴增
 	float2 GridFracPos = frac(GridPointPosition);
 	float Smoothstep_GridU_LerpFactor = SmoothstepCurve(GridFracPos.x);
 	float Smoothstep_GridV_LerpFactor = SmoothstepCurve(GridFracPos.y);
