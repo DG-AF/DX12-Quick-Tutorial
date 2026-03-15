@@ -1,5 +1,9 @@
 
-// (19) PerlinNoise: 初步学习计算着色器、UAV Resource 无序访问资源、Readback Heap 回读堆，理解并运用柏林噪声生成简单的地形网格
+// (20) InfiniteWorld: 进一步学习计算着色器，掌握动态资源的管理，认识 UAV 纹理数组与结构化缓冲区，模拟 MC 无限世界的生成
+
+
+// windows.h 与标准库里的 min/max 函数重名导致冲突了，禁用 windows.h 里面的 min/max 函数
+#define NOMINMAX
 
 
 #include<Windows.h>				// Windows 窗口编程核心头文件
@@ -24,6 +28,9 @@
 #include<fstream>				// C++ 文件流处理库
 #include<vector>				// C++ STL vector 容器库
 #include<codecvt>				// C++ 字符编码转换库，用于 string 转 wstring
+#include<cmath>					// C++ 数学标准库
+#include<unordered_map>			// C++ STL unordered_map 哈希表库，用于新旧区块比较
+#include<stack>					// C++ STL stack 栈库，用于下文的空闲栈
 
 
 #pragma comment(lib,"d3d12.lib")			// 链接 DX12 核心 DLL
@@ -200,8 +207,8 @@ public:
 
 
 
-// D2D 引擎，这里相比上一章把 D2D 的内容删了，仅保留 WIC 部分功能，暂时不画 UI
-// 目的是希望大家重点关注新东西：CS 计算着色器、UAV Descriptor/Resource 和 Readback Heap 回读堆
+// D2D 引擎，这里相比第 18 章把 D2D 的内容删了，仅保留 WIC 部分功能，暂时不画 UI
+// 目的是希望大家重点关注新东西：动态资源加载与卸载、UAV 纹理数组、UAV 结构体缓冲区
 class D2DEngine
 {
 private:
@@ -338,14 +345,14 @@ class Camera
 {
 private:
 
-	XMVECTOR EyePosition = XMVectorSet(-5, 4, 2, 1);		// 摄像机在世界空间下的位置
-	XMVECTOR FocusPosition = XMVectorSet(0, 0, 0, 1);		// 摄像机在世界空间下观察的焦点位置
+	XMVECTOR EyePosition = XMVectorSet(5, 26, 12, 1);		// 摄像机在世界空间下的位置
+	XMVECTOR FocusPosition = XMVectorSet(0, 8, 0, 1);		// 摄像机在世界空间下观察的焦点位置
 	XMVECTOR UpDirection = XMVectorSet(0, 1, 0, 0);			// 世界空间垂直向上的向量
 
 	// 摄像机观察方向的单位向量，用于前后移动
 	XMVECTOR ViewDirection = XMVector3Normalize(FocusPosition - EyePosition);
 
-	// 焦距，摄像机原点与焦点的距离，XMVector3Length 表示对向量取模
+	// 焦距，摄像机原点与焦点的距离，焦距会影响摄像机旋转视角的速度
 	float FocalLength = XMVectorGetX(XMVector3Length(FocusPosition - EyePosition));
 
 	// 摄像机向右方向的单位向量，用于左右移动，XMVector3Cross 求两向量叉乘
@@ -365,6 +372,10 @@ private:
 	XMMATRIX ProjectionMatrix;								// 投影矩阵，观察空间 -> 齐次裁剪空间
 
 	XMMATRIX MVPMatrix;										// MVP 矩阵，类外需要用公有方法 GetMVPMatrix 获取
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
 
 public:
 
@@ -451,6 +462,12 @@ public:
 		MVPMatrix = ModelMatrix * ViewMatrix * ProjectionMatrix;
 	}
 
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
 	// 获取 MVP 矩阵
 	inline XMMATRIX& GetMVPMatrix()
 	{
@@ -491,6 +508,12 @@ public:
 	{
 		return XMVector3Normalize(ViewDirection);
 	}
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
 
 	// 设置摄像机位置
 	inline void SetEyePosition(XMVECTOR pos)
@@ -554,7 +577,7 @@ private:
 	UINT RTVDescriptorSize = 0;								// RTV 描述符的大小
 	UINT FrameIndex = 0;									// 帧索引，表示当前渲染的第 i 帧 (第 i 个渲染目标)
 
-	ComPtr<ID3D12Fence> m_Fence;							// 围栏
+	ComPtr<ID3D12Fence> m_RenderFence;						// 专门用于 渲染 + 短期复制资源 的围栏
 	UINT64 FenceValue = 0;									// 用于围栏等待的围栏值
 	HANDLE RenderEvent = NULL;								// GPU 渲染事件
 	D3D12_RESOURCE_BARRIER beg_barrier = {};				// 渲染开始的资源屏障，呈现 -> 渲染目标
@@ -565,18 +588,6 @@ private:
 	ComPtr<ID3D12Resource> m_DepthStencilBuffer;			// DSV 深度模板缓冲资源
 
 	DXGI_FORMAT DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;	// DSV 资源的格式
-
-
-
-	ComPtr<ID3D12Resource> m_CBVResource;		// 常量缓冲资源，用于存放每帧都要更新/逐实例共用的数据
-	struct CBuffer								// 常量缓冲结构体
-	{
-		// MVP 矩阵，用于将顶点数据从顶点空间变换到齐次裁剪空间
-		XMFLOAT4X4 MVPMatrix;
-	};
-	CBuffer* m_ConstantBuffer = nullptr;		// 常量缓冲结构体指针，下文 Map 后指针会指向 CBVResource 的地址
-
-	Camera m_FirstCamera;						// 第一人称摄像机
 
 
 	// 视口
@@ -610,12 +621,18 @@ private:
 	std::vector<ComPtr<IWICBitmapSource>> m_TextureGroup;
 
 
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
 	// 纹理数组所有纹理的 DXGI 格式
 	DXGI_FORMAT TextureFormat = DXGI_FORMAT_UNKNOWN;
 
-	// Texture Array 纹理数组默认堆资源
+	// 方块纹理数组默认堆资源
+	// Texture2DArray m_TextureArray : register(t1, space0);
 	ComPtr<ID3D12Resource> m_SRVTextureArray_DefaultResource;
-	// GPU Texture Array 的上传堆资源，用于中转
+	// 方块纹理数组上传堆资源，用于中转
 	ComPtr<ID3D12Resource> m_SRVTextureArray_UploadResource;
 
 
@@ -636,9 +653,12 @@ private:
 	D3D12_HEAP_PROPERTIES DefaultHeapDesc = { D3D12_HEAP_TYPE_DEFAULT };	// 默认堆属性结构体
 
 
-	ComPtr<ID3D12DescriptorHeap> m_SRVUAVHeap;				// SRV/UAV 描述符堆 ([0] = SRV，[1] = UAV)
-	D3D12_CPU_DESCRIPTOR_HANDLE SRVTextureArray_CPUHandle;	// 纹理数组的 CPU 句柄，用于 CPU 端创建 SRV 描述符
-	D3D12_GPU_DESCRIPTOR_HANDLE SRVTextureArray_GPUHandle;	// 纹理数组的 GPU 句柄，用于 GPU 端着色器引用资源
+	// 用于 SRV 纹理数组 和 UAV 纹理数组 的描述符堆 (SRV + UAV)
+	ComPtr<ID3D12DescriptorHeap> m_SRVUAVHeap;
+	// 纹理数组的 SRV 描述符 CPU 句柄
+	D3D12_CPU_DESCRIPTOR_HANDLE SRVTextureArray_CPUHandle;
+	// 纹理数组的 SRV 描述符 GPU 句柄
+	D3D12_GPU_DESCRIPTOR_HANDLE SRVTextureArray_GPUHandle;
 
 
 
@@ -669,9 +689,10 @@ private:
 
 
 	// SRV Structured Buffer 的上传堆资源
-	ComPtr<ID3D12Resource> m_StructuredBuffer_UploadResource;
+	ComPtr<ID3D12Resource> m_SRVStructuredBuffer_UploadResource;
 	// SRV Structured Buffer 的默认堆资源
-	ComPtr<ID3D12Resource> m_StructuredBuffer_DefaultResource;
+	// StructuredBuffer<CUBEFACE> BlockCubeTexture_IndexGroup : register(t0, space0);
+	ComPtr<ID3D12Resource> m_SRVStructuredBuffer_DefaultResource;
 
 
 
@@ -679,25 +700,25 @@ private:
 
 
 
-	const UINT TerrianGridWidth = 100;		// 整个地形纹理的宽度 (单位：像素 -> 方块)
-	const UINT TerrianGridHeight = 100;		// 整个地形纹理的高度 (单位：像素 -> 方块)
+	// 最大区块加载半径是 4 (包括玩家所处区块本身)，进入加载半径的新区块就加载，加载范围 (5+5-1)^2 = 81
+	const int MaxCreateRadius = 5;
+	// 最大区块保持半径是 5 (包括玩家所处区块本身)，脱离保持半径的区块将被卸载，保持范围 (6+6-1)^2 = 121
+	const int MaxUnloadRadius = 6;
+	// 16x16 区块边长
+	const int ChunkSideLength = 16;
+	// 区块的最大高度，由于性能原因我们暂时设置成 24，后面我们会逐步扩充到 1.16 之前的 256 高度
+	const int MaxHeightHeight = 24;
+	// 一个区块在实例缓冲的最大实例数量，每个区块至少要占 16x16x24 的空间
+	const UINT MaxChunkInstanceCount = ChunkSideLength * ChunkSideLength * MaxHeightHeight;
+	// UAV 纹理数组和 SRV 待加载列表一次创建的最大区块数量 (9x9=81，最大加载范围)
+	const UINT MaxCreateChunkCount = (MaxCreateRadius * 2 - 1) * (MaxCreateRadius * 2 - 1);
+	// 实例缓冲所能容纳的最大已加载区块数量 (11x11=121，最大保持范围)
+	const UINT MaxKeepChunkCount = (MaxUnloadRadius * 2 - 1) * (MaxUnloadRadius * 2 - 1);
 
-	// 用于 UAV 的 100x100 高度图 (默认堆纹理)
-	ComPtr<ID3D12Resource> m_UAVTerrianHeightMap_DefaultResource;
-
-	UINT SRVUAVDescriptorSize = 0;			// SRV/UAV 这类描述符的大小
-
-	D3D12_CPU_DESCRIPTOR_HANDLE UAVHeightMap_CPUHandle;	// 高度图的 CPU 句柄，用于 CPU 端创建 UAV 描述符
-	D3D12_GPU_DESCRIPTOR_HANDLE UAVHeightMap_GPUHandle;	// 高度图的 GPU 句柄，用于 GPU 端着色器引用资源
-
-	// 专门用于计算着色器的根签名
-	ComPtr<ID3D12RootSignature> m_ComputeRootSignature;
-	// 专门用于计算着色器的渲染管线状态，计算着色器不属于常规渲染管线的任一阶段，可以作为独立阶段执行
-	ComPtr<ID3D12PipelineState> m_ComputePSO;
 
 
-	const UINT ThreadGroupsAxisXNums = 10;	// 在横轴 (TexcoordU) 要分配的线程组数量
-	const UINT ThreadGroupsAxisYNums = 10;	// 在纵轴 (TexcoordV) 要分配的线程组数量
+	const UINT TerrianGridWidth = 16;		// 每个区块高度图的宽度 (单位：像素 -> 方块)
+	const UINT TerrianGridHeight = 16;		// 每个区块高度图的高度 (单位：像素 -> 方块)
 
 
 	// 确定噪声随机生成的世界种子，相同的种子，无论在何时何地生成，都会得到完全相同的地形
@@ -705,20 +726,62 @@ private:
 	const UINT WorldSeed = 626830893;
 
 
+	D3D12_HEAP_PROPERTIES ReadbackHeapDesc = { D3D12_HEAP_TYPE_READBACK };	// 回读堆属性结构体
+
+
+
+	// SRV 待生成区块列表上传堆资源，用于将新加载的区块左上角坐标信息
+	// SRV 结构化缓冲可以用于上传堆资源，上传堆具有 Write-Combine 写入组合的 CPU 内存属性
+	// 当你通过 Map 获取的指针向这片内存写入数据时，你的写入操作会直接被 CPU 的写入组合缓冲区合并，
+	// 并通过内存总线高效地传输给 GPU，只要你的写入操作在 GPU 执行命令之前已经完成，即使不用 Unmap，
+	// 那么 GPU 也能正确地读取到最新的数据，Unmap 只是解除 CPU 地址映射，释放内核资源，通知驱动做优化
+	// StructuredBuffer<int2> m_ReadyCreateChunkBuffer : register(t0, space0);
+	ComPtr<ID3D12Resource> m_SRVReadyCreateChunkBuffer_UploadResource;
+
+	BYTE* ReadyCreateChunkPointer = nullptr;		// 指向待生成区块列表上传堆资源的指针
+
+
+	// UAV 纹理数组默认堆资源，用于 GPU 在计算着色器上计算每个区块的高度图，每个纹理元素表示一个区块的高度图
+	// RWTexture2DArray<float> m_HeightTextureArray : register(u0, space0);
+	ComPtr<ID3D12Resource> m_UAVHeightTextureArray_DefaultResource;
+
+	// UAV 纹理数组回读堆资源，用于 CPU 回读每个区块的高度图，并加载每个新区块的实例数据
+	ComPtr<ID3D12Resource> m_UAVHeightTextureArray_ReadbackResource;
+
+
+
+	// UAV 纹理数组单个元素每行对齐大小 (单位: 字节，需要 256 字节对齐)
+	UINT UAVMapBytePerRowSize = 0;
+	// UAV 纹理数组每个元素所需要的真实大小 (单位: 字节，除末行外需要 256 字节对齐)
+	UINT UAVMapSubResourceSize = 0;
+	// UAV 纹理数组单个元素占整个资源的对齐大小 (单位: 字节，需要 512 字节对齐)
+	UINT UAVMapsElementSize = 0;
+	// UAV 纹理数组在回读堆中最终所需要的总大小 (单位: 字节，除末行外需要 512 字节对齐)
+	UINT UAVReadbackResourceSize = 0;
+
+	UINT SRVUAVDescriptorSize = 0;			// SRV/UAV 这类描述符的大小
+
+	// UAV 区块高度纹理数组的 CPU 句柄
+	D3D12_CPU_DESCRIPTOR_HANDLE UAVHeightTextureArray_CPUHandle;
+	// UAV 区块高度纹理数组的 GPU 句柄
+	D3D12_GPU_DESCRIPTOR_HANDLE UAVHeightTextureArray_GPUHandle;
+
+
 
 	// ---------------------------------------------------------------------------------------------------------------
 
 
 
-	// 回读堆资源每行需要分配的大小 (单位：字节，需要 256 字节对齐，计算公式和中转纹理一样的)
-	UINT ReadbackResourceRowSize = 0;
-	// 回读堆资源的总大小 (单位：字节，需要 256 字节对齐，计算公式和中转纹理一样的)
-	UINT ReadbackResourceSize = 0;
+	// NoiseShader 使用的根签名
+	ComPtr<ID3D12RootSignature> m_NoiseRootSignature;
+	// NoiseShader 使用的 PSO
+	ComPtr<ID3D12PipelineState> m_NoisePSO;
 
-	D3D12_HEAP_PROPERTIES ReadbackHeapDesc = { D3D12_HEAP_TYPE_READBACK };	// 回读堆属性结构体
 
-	// 用于 CPU 回读的 100x100 高度图 (共享内存)
-	ComPtr<ID3D12Resource> m_UAVTerrianHeightMap_ReadbackResource;
+	// 将 UAV 纹理数组 从 UNORDERED_ACCESS -> COPY_SOURCE 的资源屏障
+	D3D12_RESOURCE_BARRIER UAVToCopySource_barrier = {};
+	// 将 UAV 纹理数组 从 COPY_SOURCE -> UNORDERED_ACCESS 的资源屏障
+	D3D12_RESOURCE_BARRIER CopySourceToUAV_barrier = {};
 
 
 
@@ -729,8 +792,25 @@ private:
 	// 专门用于渲染方块的根签名
 	ComPtr<ID3D12RootSignature> m_RenderRootSignature;
 	// 专门用于渲染方块的渲染管线状态
-	ComPtr<ID3D12PipelineState> m_RenderBlockPSO;
+	ComPtr<ID3D12PipelineState> m_RenderPSO;
 
+
+	// 用于渲染方块的常量缓冲资源
+	// cbuffer GlobalData : register(b0, space0)
+	ComPtr<ID3D12Resource> m_CBVRenderBlock_UploadResource;
+
+	// 常量缓冲结构体
+	struct RenderCBuffer
+	{
+		// MVP 矩阵，用于将顶点数据从顶点空间变换到齐次裁剪空间
+		XMFLOAT4X4 MVPMatrix;
+	};
+
+	// 常量缓冲结构体指针，下文 Map 后指针会指向 RenderCBVResource 的地址
+	RenderCBuffer* RenderCBufferPointer = nullptr;
+
+	Camera m_FirstCamera;		// 第一人称摄像机
+	
 
 
 	// ---------------------------------------------------------------------------------------------------------------
@@ -750,6 +830,7 @@ private:
 		XMFLOAT2 TexcoordUV;	// 顶点纹理 UV
 		UINT FaceIndex;			// 顶点所属的立方体面索引
 	};
+
 
 	// 每个方块实例共用的顶点数据 (逐顶点流)
 	std::vector<VERTEX> PreBlockVertexData =
@@ -794,6 +875,7 @@ private:
 		{ XMFLOAT4(-0.5, -0.5, -0.5, 1), XMFLOAT2(0, 1), 5 }
 	};
 
+
 	// 每个方块实例共用的索引数据
 	std::vector<UINT> PreBlockIndexData =
 	{
@@ -813,14 +895,12 @@ private:
 
 
 	// 方块实例结构体
-	struct BLOCKINSTANCE
+	struct BLOCK_INSTANCE
 	{
 		XMFLOAT3 BlockOffset;	// 每个方块实例距离世界中心 (0, 0, 0) 的位移
 		UINT BlockType;			// 方块类型
 	};
 
-	// 方块实例组，存储每一个方块实例
-	std::vector<BLOCKINSTANCE> BlockGroup;
 
 
 	// 上传堆顶点资源
@@ -829,6 +909,66 @@ private:
 	ComPtr<ID3D12Resource> m_BlockIndexResource;
 	// 上传堆实例资源
 	ComPtr<ID3D12Resource> m_BlockInstanceResource;
+
+
+	// 指向 m_BlockInstanceResource 所有方块实例资源的指针，注意指针类型是 BLOCK_INSTANCE！
+	BLOCK_INSTANCE* BlockInstanceMapPointer = nullptr;
+
+
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 区块状态枚举
+	enum CHUNK_STATE
+	{
+		NONE,		// 无状态，表示该区块尚未使用的初始状态
+		CREATE,		// 加载状态，代表该区块进入了玩家的可见范围，需要加载到缓冲中
+		KEEP,		// 保持状态，代表该区块已加载，且仍在玩家的范围内，不进行任何操作
+		UNLOAD		// 卸载状态，代表该区块已经远离了玩家一定范围，暂时不需要了，卸载节省缓冲资源
+	};
+
+
+	// 16x16x24 的区块信息结构体，存储区块 实例偏移、实例量、AABB 包围盒、区块状态 这些元信息
+	struct CHUNK
+	{
+		XMINT2 ChunkXZ = {};		// 整个区块左上角的 xz 轴坐标
+		UINT InstanceOffset = 0;	// 整个区块在实例缓冲的偏移量 (单位：方块实例)
+		UINT InstanceCount = 0;		// 整个区块的实例数量 (单位：方块实例)
+		CHUNK_STATE State = NONE;	// 整个区块的状态
+	};
+
+
+	// 用于放置区块实例元信息的 HiveBuffer 缓冲，它不是连续缓冲，里面有数据空位 (最大 121 个区块元素)
+	std::vector<CHUNK> ChunkMetaDataHiveBuffer;
+
+
+	// 用于区块遍历，快速查找，状态比较，存储所有已加载区块索引的哈希表
+	// Key 是区块左上角坐标 ChunkXZ，value 是区块元素在 ChunkMetaDataBuffer 的索引
+	// 删除元素后 unordered_map 的其他元素 (迭代器) 稳定，这一点不必担心
+	std::unordered_map<UINT64, UINT> ChunkSearchMap;
+
+
+	// 管理实例缓冲是否有 能容纳区块的空位 (空泡) 的空闲栈，这个空位是区块在实例缓冲的偏移量
+	// 空闲栈借鉴了 C++26 即将到来的 std::hive (蜂巢) 中 "空泡" 和 "空闲链表" 的思想
+	// std::hive 是一种比 vector 综合性能更强的无序数据结构，非常适合存储游戏实体数据
+	// 大部分游戏引擎的 ECS 系统 (Entity-Component-System 实体组件系统) 都是基于它的思想实现的
+	// 我们后续的章节也会涉及到简单 ECS 系统的实现，ECS 系统对我们的学习是很重要的
+	// std::vector 是动态连续数组，如果有元素被 erase 移除，后面的元素也要移到前面
+	// 这种操作常常使对象迭代器失效，所以不能在循环内移除元素，而且如果频繁有旧元素移除，新元素添加，
+	// 久而久之，就会产生很大的元素移动开销，而且元素 (迭代器) 不稳定，对数据复用很不方便
+	// 在 std::hive 中，元素被移除后，会原地产生一个 "数据空泡"，后面的元素不会进行移动
+	// 新数据想写入 std::hive，直接找最近的空泡就行，非常方便，还能提高数据复用率
+	// 因为 "空泡" 的存在，在 std::hive 里，插入元素、删除元素只做一次，非常高效
+	// 而且还能循环插入/删除，元素 (迭代器) 不会移动，插入新元素后，其他元素不会有影响，非常稳定
+	// 那如何找到最近的 "空泡" 呢？这个数据结构使用了 "空闲链表" 来存储这些空泡，查找 "空泡" 也只做一次
+	// 我们这里用栈来模拟 "空闲链表"，栈顶就是距离最近的 "空泡" (数据空位)
+	std::stack<UINT> FreeChunkSpaceStack;
+
+
+	// 待加载区块连续缓冲 (最大 81 个区块元素)
+	std::vector<CHUNK> ReadyCreateChunkBuffer;
 
 
 
@@ -1044,12 +1184,12 @@ public:
 		RenderEvent = CreateEvent(nullptr, false, false, nullptr);
 
 		// 创建围栏，设定初始值为 0
-		m_D3D12Device->CreateFence(FenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_Fence));
+		m_D3D12Device->CreateFence(FenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_RenderFence));
 
 
 		// 设置资源屏障
 		// beg_barrier 起始屏障：Present 呈现状态 -> Render Target 渲染目标状态
-		beg_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;	
+		beg_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 		beg_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
 		beg_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
@@ -1125,32 +1265,16 @@ public:
 	}
 
 
-	// 创建 Constant Buffer Resource 常量缓冲资源
-	void STEP11_CreateCBVResource()
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 使用 D2D 引擎的 WIC 功能加载并转换纹理图片
+	void STEP11_LoadImageAndTransform()
 	{
-		// 常量资源宽度，这里填整个结构体的大小。注意！硬件要求，常量缓冲需要 256 字节对齐！所以这里要进行 Ceil 向上取整，进行内存对齐！
-		// D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT = 256
-		UINT CBufferWidth = Ceil(sizeof(CBuffer), 256) * 256;
-
-		D3D12_RESOURCE_DESC CBVResourceDesc = {};						// 常量缓冲资源信息结构体
-		CBVResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;	// 上传堆资源都是缓冲
-		CBVResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;		// 上传堆资源都是按行存储数据的 (一维线性存储)
-		CBVResourceDesc.Width = CBufferWidth;							// 常量缓冲区资源宽度 (要分配显存的总大小)
-		CBVResourceDesc.Height = 1;										// 上传堆资源都是存储一维线性资源，所以高度必须为 1
-		CBVResourceDesc.Format = DXGI_FORMAT_UNKNOWN;					// 上传堆资源的格式必须为 DXGI_FORMAT_UNKNOWN
-		CBVResourceDesc.DepthOrArraySize = 1;							// 资源深度，这个是用于纹理数组和 3D 纹理的，上传堆资源必须为 1
-		CBVResourceDesc.MipLevels = 1;									// Mipmap 等级，这个是用于纹理的，上传堆资源必须为 1
-		CBVResourceDesc.SampleDesc.Count = 1;							// 资源采样次数，上传堆资源都是填 1
-
-		// 上传堆属性的结构体，上传堆位于 CPU 和 GPU 的共享内存
-		D3D12_HEAP_PROPERTIES UploadHeapDesc = { D3D12_HEAP_TYPE_UPLOAD };
-
-		// 创建常量缓冲资源
-		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE, &CBVResourceDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_CBVResource));
-
-		// 常量缓冲直接 Map 映射到结构体指针就行即可，不需要再 Unmap，小数据下常量缓冲传递效率很高
-		m_CBVResource->Map(0, nullptr, reinterpret_cast<void**>(&m_ConstantBuffer));
+		m_D2DEngine.D2D_STEP01_InitializeWICFactory();
+		m_D2DEngine.D2D_STEP02_LoadTextureIntoWICBitmaps(TextureNames, m_TextureGroup);
 	}
 
 
@@ -1159,16 +1283,8 @@ public:
 
 
 
-	// 使用 D2D 引擎的 WIC 功能加载并转换纹理图片
-	void STEP12_LoadImageAndTransform()
-	{
-		m_D2DEngine.D2D_STEP01_InitializeWICFactory();
-		m_D2DEngine.D2D_STEP02_LoadTextureIntoWICBitmaps(TextureNames, m_TextureGroup);
-	}
-
-
 	// 获取纹理数组的各种属性，以第一个元素为准，后面的元素这些属性是一样的 (作者检查过了)
-	void STEP13_GetTextureArrayElementsProperties()
+	void STEP12_GetTextureArrayElementsProperties()
 	{
 		// 获取第一个纹理的 DXGI 格式
 		WICPixelFormatGUID WICPixelFormat = {};
@@ -1205,18 +1321,18 @@ public:
 
 
 	// 创建纹理数组需要的上传堆资源与默认堆资源
-	void STEP14_CreateTextureArrayResource()
+	void STEP13_CreateTextureArrayResource()
 	{
 		// 用于中转纹理的上传堆资源结构体
 		D3D12_RESOURCE_DESC UploadResourceDesc = {};
-		UploadResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;		// 资源类型，上传堆的资源类型都是 buffer 缓冲
-		UploadResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;			// 资源布局，指定资源的存储方式，上传堆的资源都是 row major 按行线性存储
-		UploadResourceDesc.Width = UploadResourceSize;						// 资源宽度，上传堆的资源宽度是资源的总大小，注意资源大小必须只多不少
-		UploadResourceDesc.Height = 1;										// 资源高度，上传堆仅仅是传递线性资源的，所以高度必须为 1
-		UploadResourceDesc.Format = DXGI_FORMAT_UNKNOWN;					// 资源格式，上传堆资源的格式必须为 UNKNOWN
-		UploadResourceDesc.DepthOrArraySize = 1;							// 资源深度，上传堆资源必须为 1
-		UploadResourceDesc.MipLevels = 1;									// Mipmap 等级，上传堆资源必须为 1
-		UploadResourceDesc.SampleDesc.Count = 1;							// 资源采样次数，上传堆资源都是填 1
+		UploadResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		UploadResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		UploadResourceDesc.Width = UploadResourceSize;
+		UploadResourceDesc.Height = 1;
+		UploadResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+		UploadResourceDesc.DepthOrArraySize = 1;
+		UploadResourceDesc.MipLevels = 1;
+		UploadResourceDesc.SampleDesc.Count = 1;
 
 
 		// 创建上传堆资源
@@ -1243,7 +1359,7 @@ public:
 
 
 	// 将纹理数组资源逐步复制到默认堆资源中
-	void STEP15_CopyTextureArrayToDefaultResource()
+	void STEP14_CopyTextureArrayToDefaultResource()
 	{
 		// 用于暂时存储纹理数据的指针，这里要用 malloc 分配空间
 		BYTE* TextureData = (BYTE*)malloc(TextureSize);
@@ -1348,10 +1464,10 @@ public:
 		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
 		// 命令队列执行到这里会修改围栏值，表示渲染已完成，"击中"围栏，同时修改围栏的 Completed Value 任务完成值
 		// 这里传入 FenceValue 是因为 CommandQueue 要用这个值标记预定事件，关联围栏
-		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
+		m_CommandQueue->Signal(m_RenderFence.Get(), FenceValue);
 		// 设置围栏的预定事件，当渲染完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
 		// 这里传入 FenceValue 是因为围栏要拿这个值开辟对应的 Event Slot 事件槽，并将 CPU 端事件句柄绑定到事件槽上
-		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
+		m_RenderFence->SetEventOnCompletion(FenceValue, RenderEvent);
 
 
 		// 让主线程强制等待复制完成，经过此函数后 RenderEvent 会自动重置到无信号状态 (CreateEvent 第二个参数)
@@ -1360,7 +1476,7 @@ public:
 
 
 	// 创建 SRV + UAV 两个描述符的着色器资源描述符堆
-	void STEP16_CreateSRVUAVHeap()
+	void STEP15_CreateSRVUAVHeap()
 	{
 		D3D12_DESCRIPTOR_HEAP_DESC HeapDesc = {};					// SRV/UAV 描述符堆信息结构体
 		HeapDesc.NumDescriptors = 2;								// SRV + 新的 UAV
@@ -1372,8 +1488,8 @@ public:
 	}
 
 
-	// 用上文创建的 m_SRVTextureArray_DefaultResource 创建 SRV 描述符
-	void STEP17_CreateTextureArraySRV()
+	// 用上文创建的 m_SRVTextureArray_DefaultResource 创建 SRV 纹理数组描述符
+	void STEP16_CreateTextureArraySRV()
 	{
 		// Texture Array 的 SRV 信息结构体，我们要通过 SRV 告知 GPU 这个资源的类型与用法
 		D3D12_SHADER_RESOURCE_VIEW_DESC SRVTextureArrayDesc = {};
@@ -1407,7 +1523,7 @@ public:
 
 	// 创建 SRV Structured Buffer (结构化缓冲区)
 	// 我们这里要传递立方体面纹理索引数据 (静态资源)，所以用 SRV Structured Buffer
-	void STEP18_CreateStructuredBufferResource()
+	void STEP17_CreateStructuredBufferResource()
 	{
 		// Structured Buffer 中转资源的上传堆信息结构体，填法和顶点/索引缓冲一样
 		D3D12_RESOURCE_DESC StructuredBufferUploadDesc = {};
@@ -1422,7 +1538,7 @@ public:
 
 		// 创建上传堆资源
 		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE, &StructuredBufferUploadDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_StructuredBuffer_UploadResource));
+			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_SRVStructuredBuffer_UploadResource));
 
 
 		// Structured Buffer 中转资源的默认堆信息结构体
@@ -1438,26 +1554,25 @@ public:
 
 		// 创建默认堆资源
 		m_D3D12Device->CreateCommittedResource(&DefaultHeapDesc, D3D12_HEAP_FLAG_NONE, &StructuredBufferDefaultDesc,
-			D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_StructuredBuffer_DefaultResource));
+			D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_SRVStructuredBuffer_DefaultResource));
 	}
 
 
-
-	// 将 SRV Structured Buffer Resource 逐步复制到默认堆资源中
+	// 将 SRV Structured Buffer Resource 逐步复制到默认堆资源中，注意 SRV Structured Buffer 不需要 SRVHeap
 	// 和 CBVResource 一样，直接使用 SRV RootDescriptor
-	void STEP19_CopyStructuredBufferToDefaultResource()
+	void STEP18_CopyStructuredBufferToDefaultResource()
 	{
 		// 用于传递资源的指针
 		BYTE* TransferPointer = nullptr;
 
 		// Map 映射，获取上传堆资源的地址并传递到 TransferPointer
-		m_StructuredBuffer_UploadResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
+		m_SRVStructuredBuffer_UploadResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
 
 		// 直接 memcpy 复制 (CPU 高速缓存 -> 共享内存)
 		memcpy(TransferPointer, &BlockCubeTexture_IndexGroup[0], BlockCubeTexture_IndexGroup.size() * sizeof(CUBEFACE));
 
 		// UnMap 结束映射，下一步就要复制到默认堆
-		m_StructuredBuffer_UploadResource->Unmap(0, nullptr);
+		m_SRVStructuredBuffer_UploadResource->Unmap(0, nullptr);
 
 
 		// 复制资源需要使用 GPU 的 CopyEngine 复制引擎，所以需要向命令队列发出复制命令
@@ -1466,8 +1581,8 @@ public:
 
 
 		// 发送复制到默认堆的指令，注意这里用的是 CopyBufferRegion 复制缓冲指令，不用填麻烦的结构体，直接填参数上传 (共享内存 -> GPU 显存)
-		m_CommandList->CopyBufferRegion(m_StructuredBuffer_DefaultResource.Get(), 0,
-			m_StructuredBuffer_UploadResource.Get(), 0, BlockCubeTexture_IndexGroup.size() * sizeof(CUBEFACE));
+		m_CommandList->CopyBufferRegion(m_SRVStructuredBuffer_DefaultResource.Get(), 0,
+			m_SRVStructuredBuffer_UploadResource.Get(), 0, BlockCubeTexture_IndexGroup.size() * sizeof(CUBEFACE));
 
 
 		// 关闭命令列表
@@ -1483,13 +1598,14 @@ public:
 		// 将围栏预定值设定为下一帧，注意复制资源也需要围栏等待，否则会发生资源冲突！
 		FenceValue++;
 		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
-		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
+		m_CommandQueue->Signal(m_RenderFence.Get(), FenceValue);
 		// 设置围栏的预定事件，当复制完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
-		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
+		m_RenderFence->SetEventOnCompletion(FenceValue, RenderEvent);
 
 
-		// 让主线程强制等待复制完成，经过此函数后 RenderEvent 会自动重置到无信号状态 (CreateEvent 第二个参数)
-		WaitForSingleObject(RenderEvent, INFINITE);
+		// 下一个等待就是 RenderLoop 的 MsgWaitForMultipleObjects，不需要用 WaitForSingleObject 了
+		// 这里再用一次 WaitForSingleObject 就会使事件变成无信号 (CreateEvent 第二个参数)
+		// 导致在 MsgWaitForMultipleObjects 那里卡死，永远返回 1，窗口白屏，完全进不去 case 0 渲染函数
 	}
 
 
@@ -1498,142 +1614,145 @@ public:
 
 
 
-	// 本章我们将正式接触一个全新的着色器：Compute Shader 计算着色器
-	// 早期显卡使用固定渲染管线，开发者只能通过设置一系列固定参数来控制渲染效果，灵活性很差
-	// 后面出现了可编程着色器，VS/PS 被引入到渲染管线中，这为图形效果带来了巨大的自由度
-	// 然而，这些着色器仍然被设计为专门服务于图形渲染的特定阶段，它们能访问的资源、能执行的操作都受到限制。
-	// 例如，像素着色器只能处理当前像素，无法随意读写任意内存位置。
-
-	// 2000 年代中期，研究人员发现，GPU 的并行架构 (包含数百个计算核心) 非常适合执行数据并行任务，而不仅仅局限于图形
-	// 于是出现了 GPGPU (General-Purpose computing on Graphics Processing Units) 的概念，即利用 GPU 进行通用计算
-	// 最初的 GPGPU 编程非常别扭：开发者必须把通用计算任务伪装成图形渲染任务，比如把数据编码成纹理，用像素着色器来执行计算
-	// 再把结果从纹理中读出来，这种方式不仅效率低，而且难以编写和调试。
-	// 为了真正释放 GPU 的计算潜力，DirectX 10 首次引入了计算着色器 (Compute Shader) 这一独立的着色器阶段
-	// 在 DirectX 11 中，计算着色器得到了进一步强化，从此，开发者可以直接在 GPU 上编写并行算法，而不需要绕过图形管线的限制
-
-	// 计算着色器不是渲染管线的一部分，它不属于渲染管线任一阶段，是独立存在的
-	// 可以通过 Dispatch 调用在 GPU 上启动大量线程，每个线程可以读取/写入缓冲区或纹理中的任意位置
-	// 计算着色器的用途特别多：物理模拟，后处理特效，几何处理，全局光照，图像处理，人工智能
-	// 几乎什么都能做，属于万金油级别的重量级角色，我们接下来要讲的柏林噪声就要靠它！
-
-
-
-	// Noise 噪声，它来源于信号处理领域，是指任何不携带有用信息、随机波动的信号
-	// 收音机的沙沙声、老照片上的颗粒、电视雪花屏，这些都算"噪声"。Noise 后面被引入到图形学相关领域，
-	// 地形的高度起伏、云朵的形态、原木和大理石的纹理、火焰和烟雾的流动，这些在现实生活中习以为常的东西
-	// 想要在计算机中生成它们，背后的数学原理都是噪声算法，在图形学中，它本质上是一个随机数生成器
-
-	// 最早的噪声叫 White Noise 白噪声，它是空间/时间上的每个点都是独立同分布的随机信号
-	// 老电视没信号时"沙沙"的雪花声，电视雪花屏，这些都算白噪声，相邻像素之间没有关联
-	// C 语言的 rand() 函数用的线性同余法，C++ random 标准库的 std::19937 用的梅森旋转，生成的都算白噪声
-	// 白噪声完全不连续，无法模拟自然界中连续变化的纹理，缺乏有规律的结构，而且高频过多
-
-	// 之后发展成了 Value Noise 值噪声，它的思路也很简单，本质还是插值：
-	// 在整数格点上放置随机值，对非整数格点用高阶函数进行插值得到平滑的过渡
-	// 简单可行，缺点是 线性插值会出现可见的块状结构，高阶插值会残留网格排列的痕迹，看起来不够"自然"
-
-	// 1983 年，Ken Perlin 为迪士尼电影《电子世界争霸战》(TRON) 工作时，需要生成更自然的纹理
-	// 他发现值噪声的块状感太强，于是发明了一种新的噪声方法，后面用他的名字命名为 Perlin Noise 柏林噪声
-	// 这个算法是一个里程碑级的自然噪声算法，后来 Perlin 靠他获得了奥斯卡科技成果奖
-	
-	// 柏林噪声的核心思想是"梯度噪声":
-	// 不在格点上存储随机值，而是存储随机梯度向量 (方向)，对于空间中的任意点
-	// 计算该点与周围格点之间的偏移向量，并与每个格点的梯度向量做点积，然后对这些点积结果进行插值
-	// 如果向量方向一致，点积结果越大，越有可能出现"山峰"; 向量方向相反，点积结果越小，越有可能出现"山谷"
-	// 对这些结果进行平滑插值，就可以在方方正正的 2D 网格上得到错落有致、层峦叠嶂的自然曲面
-	// 这种思路模仿了自然界中物质状态的相互作用：某一点的状态不仅取决于它本身，还受到周围物质运动方向的影响
-	// 柏林噪声有很多优点：各向同性，连续性，可重复性，可控性等等，它能应用于动画，特效，纹理与地形生成
-
-
-
-	// 我们要在 GPU 上做柏林噪声算法，生成原版游戏的自然地形，这个涉及到了 GPU 的通用计算 (GPGPU)
-	// 我们需要生成一个 100x100 的地形高度图，来模拟自然地形 (如果读者你们有需要，也可以改成 256x256 甚至更大，用好一点的显卡，不然会很卡)
-	// 自然地形生成的第一步，是需要得到地形某一点的最大高度，2D 纹理是存储高度图 (HeightMap) 的最佳人选
-	// 生成高度图是要写入数据的，但是 SRV Resource 在 GPU 上只读，不可以写入数据，怎么办呢？
-	// 接下来介绍一个重磅级角色：Unordered Access View (Descriptor) 无序访问描述符！
-
-	// UAV Descriptor 无序访问描述符，指定了某个资源在 GPU 上可读可写，常用于计算着色器、后处理、粒子效果等
-	// 为什么它叫"无序访问"呢？是因为它允许着色器对资源进行随机的、并发的读/写操作
-	// 现代 GPU 动辄上万子线程，犹如饥肠辘辘的饿狼，为了"生存本能"，毫无秩序地扑向同一块名为 UAV 的猎物
-	// 它们从四面八方涌来，争先恐后，无视先来后到，只为撕咬一口属于自己的数据
-	// 猎物在疯狂的争夺中被反复撕扯、改写，每一次咬痕都可能覆盖前一次的印记 —— 这便是"无序访问"的写照
-	// 若没有原子操作这柄锁链的束缚，猎物终将在混乱中被撕成碎片，数据荡然无存
-	// 我们需要创建 UAV Texture2D 纹理资源 (默认堆)，来存储高度图 (HeightMap)，面对我吧！
-	void STEP20_CreateUAVTerrianHeightMapResource()
+	// 创建 NoiseShader 通过柏林噪声算法生成区块所需要的各种资源
+	void STEP19_CreateNoiseRequireResource()
 	{
-		// 用于 UAV 的高度图 (纹理) 资源信息结构体
-		D3D12_RESOURCE_DESC UAVTerrianHeightMapDesc = {};
-		// 高度图维度是 2D 纹理
-		UAVTerrianHeightMapDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-		// 高度图宽度 100 像素
-		UAVTerrianHeightMapDesc.Width = TerrianGridWidth;
-		// 高度图高度 100 像素
-		UAVTerrianHeightMapDesc.Height = TerrianGridHeight;
-		// 高度图不使用 Mipmap
-		UAVTerrianHeightMapDesc.MipLevels = 1;
-		// 高度图每个像素只存储高度，所以用 DXGI_FORMAT_R32_FLOAT 单通道格式
-		UAVTerrianHeightMapDesc.Format = DXGI_FORMAT_R32_FLOAT;
-		// 纹理资源布局都是 D3D12_TEXTURE_LAYOUT_UNKNOWN
-		UAVTerrianHeightMapDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-		// 高度图深度填 1，只有一个子资源
-		UAVTerrianHeightMapDesc.DepthOrArraySize = 1;
-		// 高度图采样次数填 1
-		UAVTerrianHeightMapDesc.SampleDesc.Count = 1;
-		// 注意这里！资源创建标志要加上 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS！
-		UAVTerrianHeightMapDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+		// 创建 m_SRVReadyCreateChunkBuffer_UploadResource，并进行持续化映射
+		{
+			// 上传堆资源结构体信息，注意资源宽度!
+			D3D12_RESOURCE_DESC UploadResourceDesc = {};
+			UploadResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			UploadResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			UploadResourceDesc.Width = MaxCreateChunkCount * sizeof(XMINT2);
+			UploadResourceDesc.Height = 1;
+			UploadResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+			UploadResourceDesc.DepthOrArraySize = 1;
+			UploadResourceDesc.MipLevels = 1;
+			UploadResourceDesc.SampleDesc.Count = 1;
 
 
-		// 创建 UAV 高度图资源
-		// 注意第四个参数！GPU 要使用 UAV 资源，初始状态必须是 D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-		m_D3D12Device->CreateCommittedResource(&DefaultHeapDesc, D3D12_HEAP_FLAG_NONE,
-			&UAVTerrianHeightMapDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-			nullptr, IID_PPV_ARGS(&m_UAVTerrianHeightMap_DefaultResource));
+			// 创建区块待生成列表上传堆资源，注意状态！
+			m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE,
+				&UploadResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+				IID_PPV_ARGS(&m_SRVReadyCreateChunkBuffer_UploadResource));
+
+
+			// 进行持续化映射，通过指针进行写入操作，在 GPU 进行读取之前都能完成
+			m_SRVReadyCreateChunkBuffer_UploadResource->Map(0, nullptr,
+				reinterpret_cast<void**>(&ReadyCreateChunkPointer));
+		}
+
+
+		// 创建 m_UAVHeightTextureArray_DefaultResource
+		{
+			// UAV 纹理数组默认堆资源信息，创建原理和 SRV 纹理数组 相同
+			// 注意！要带上相应的 UAV Flag！
+			D3D12_RESOURCE_DESC DefaultResourceDesc = {};
+			DefaultResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+			DefaultResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+			DefaultResourceDesc.Width = TerrianGridWidth;
+			DefaultResourceDesc.Height = TerrianGridHeight;
+			DefaultResourceDesc.Format = DXGI_FORMAT_R32_FLOAT;
+			DefaultResourceDesc.DepthOrArraySize = MaxCreateChunkCount;
+			DefaultResourceDesc.MipLevels = 1;
+			DefaultResourceDesc.SampleDesc.Count = 1;
+			DefaultResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+
+			// 创建 UAV 纹理数组默认堆资源，注意资源状态！
+			m_D3D12Device->CreateCommittedResource(&DefaultHeapDesc, D3D12_HEAP_FLAG_NONE,
+				&DefaultResourceDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+				IID_PPV_ARGS(&m_UAVHeightTextureArray_DefaultResource));
+		}
+
+
+		// 创建 m_UAVHeightTextureArray_ReadbackResource，需要计算对齐大小！
+		{
+			// UAV 纹理数组回读堆和 SRV 上传堆一样要计算对齐大小！
+			UAVMapBytePerRowSize = Ceil(TerrianGridWidth * sizeof(float), 256) * 256;
+			UAVMapSubResourceSize = UAVMapBytePerRowSize * (TerrianGridHeight - 1) + TerrianGridWidth * 4;
+
+			UAVMapsElementSize = Ceil(UAVMapSubResourceSize, 512) * 512;
+			UAVReadbackResourceSize = UAVMapsElementSize * (MaxCreateChunkCount - 1) + UAVMapSubResourceSize;
+
+
+			// UAV 纹理数组回读堆信息
+			D3D12_RESOURCE_DESC ReadbackResourceDesc = {};
+			ReadbackResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			ReadbackResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			ReadbackResourceDesc.Width = UAVReadbackResourceSize;
+			ReadbackResourceDesc.Height = 1;
+			ReadbackResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+			ReadbackResourceDesc.DepthOrArraySize = 1;
+			ReadbackResourceDesc.MipLevels = 1;
+			ReadbackResourceDesc.SampleDesc.Count = 1;
+
+
+			// 创建 UAV 纹理数组回读堆资源，注意资源状态！
+			m_D3D12Device->CreateCommittedResource(&ReadbackHeapDesc, D3D12_HEAP_FLAG_NONE,
+				&ReadbackResourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+				IID_PPV_ARGS(&m_UAVHeightTextureArray_ReadbackResource));
+		}
 	}
 
 
-	// 在 STEP16_CreateSRVUAVHeap 的基础上创建 UAV 描述符，描述这个 UAV 高度图资源是 UAV Texture2D
+	// 在 STEP15_CreateSRVUAVHeap 的基础上创建 UAV 描述符，描述这个 UAV 高度图资源是 UAV Texture2DArray
 	// 注意：用于纹理的 UAV 资源也不能做根描述符使用！必须使用根描述表！
-	void STEP21_CreateHeightMapUAV()
+	void STEP20_CreateHeightTextureArrayUAV()
 	{
-		// 用于 2D 纹理的 UAV 描述符
-		D3D12_UNORDERED_ACCESS_VIEW_DESC UAVTexture2DDesc = {};
-		// 必须和 ID3D12Resource 的格式一致
-		UAVTexture2DDesc.Format = DXGI_FORMAT_R32_FLOAT;
-		// 资源类型是 2D 纹理
-		UAVTexture2DDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-		
+		// UAV 描述符信息结构体
+		D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc = {};
+		// 类型是 Texture2DArray
+		UAVDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+		// 格式必须和资源一样，R32_FLOAT
+		UAVDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		// 首元素索引是 0
+		UAVDesc.Texture2DArray.FirstArraySlice = 0;
+		// 纹理数组的长度
+		UAVDesc.Texture2DArray.ArraySize = MaxCreateChunkCount;
+		// 不使用 Mipmap，填 0，注意这里和 SRV 纹理数组不一样！
+		UAVDesc.Texture2DArray.MipSlice = 0;
+
+
 		// 获取 SRV/UAV 这类描述符的大小
 		SRVUAVDescriptorSize = m_D3D12Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
 		// UAV 是 SRV 的下一个描述堆元素 (第二个描述符)，在获取首元素 (SRVHandle) 的基础上进行偏移
-		UAVHeightMap_CPUHandle = SRVTextureArray_CPUHandle;
-		UAVHeightMap_CPUHandle.ptr += SRVUAVDescriptorSize;
-		UAVHeightMap_GPUHandle = SRVTextureArray_GPUHandle;
-		UAVHeightMap_GPUHandle.ptr += SRVUAVDescriptorSize;
+		UAVHeightTextureArray_CPUHandle = SRVTextureArray_CPUHandle;
+		UAVHeightTextureArray_CPUHandle.ptr += SRVUAVDescriptorSize;
+		UAVHeightTextureArray_GPUHandle = SRVTextureArray_GPUHandle;
+		UAVHeightTextureArray_GPUHandle.ptr += SRVUAVDescriptorSize;
 
-		// 创建 HeightMap 的 UAV 描述符
+
+		// 创建 HeightTextureArray 的 UAV 描述符
 		// 第二个参数是计数器资源，我们不需要它，填 nullptr 就行
-		m_D3D12Device->CreateUnorderedAccessView(m_UAVTerrianHeightMap_DefaultResource.Get(),
-			nullptr, &UAVTexture2DDesc, UAVHeightMap_CPUHandle);
+		m_D3D12Device->CreateUnorderedAccessView(m_UAVHeightTextureArray_DefaultResource.Get(),
+			nullptr, &UAVDesc, UAVHeightTextureArray_CPUHandle);
 	}
 
 
-	// 创建专门用于计算着色器的根签名
-	void STEP22_CreateComputeRootSignature()
+
+	// ---------------------------------------------------------------------------------------------------------------
+
+
+
+	// 创建专门用于 NoiseShader 的根签名
+	void STEP21_CreateNoiseRootSignature()
 	{
-		// ComputeRootSignature 的根参数 + 静态采样器列表
+		// NoiseRootSignature 的根参数 + 静态采样器列表
 		// Para 0: (Type = Root Constants,	 1 DWORD)  (b0, space0) CBV 根常量，用于常量缓冲 (世界种子)
-		// Para 1: (Type = Descriptor Table, 1 DWORD)  (u0, space0) UAV 描述表，用于高度图
+		// Para 1: (Type = Root Descriptor,	 2 DWORD)  (t0, space0) SRV 根描述符，用于区块待生成列表
+		// Para 2: (Type = Descriptor Table, 1 DWORD)  (u0, space0) UAV 根描述表，用于高度图纹理数组
 		// 
 		// None Static Sampler	没有静态采样器，计算着色器现在不需要用到
 
 		ComPtr<ID3DBlob> SignatureBlob;			// 根签名字节码
 		ComPtr<ID3DBlob> ErrorBlob;				// 错误字节码
 
-		D3D12_ROOT_PARAMETER RootParameters[2] = {};		// 根参数数组
+		D3D12_ROOT_PARAMETER RootParameters[3] = {};		// 根参数数组
 
 
-		// 第一个根参数：32 位根常量，根常量其实就是一个内联参数，不需要创建特定的资源，记录命令直接传数字就行
+		// 第一个根参数：32 位根常量 (WorldSeed)
 		RootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 		RootParameters[0].Constants.Num32BitValues = 1;		// 只有一个根常量
 		RootParameters[0].Constants.ShaderRegister = 0;		// b0
@@ -1641,7 +1760,14 @@ public:
 		RootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 
-		// 第二个根参数：根描述表，这里我们只用一个 UAV Range
+		// 第二个根参数：SRV 根描述符 (m_ReadyUploadChunkBuffer)
+		RootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		RootParameters[1].Descriptor.ShaderRegister = 0;	// t0
+		RootParameters[1].Descriptor.RegisterSpace = 0;		// space0
+		RootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+
+		// 第三个根参数：描述符表 (1 UAV，m_HeightTextureArray)
 		D3D12_DESCRIPTOR_RANGE UAVRangeDesc = {};			// UAV 描述符在 Table 的范围
 		UAVRangeDesc.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
 		UAVRangeDesc.NumDescriptors = 1;					// Range 只有一个描述符
@@ -1649,20 +1775,16 @@ public:
 		UAVRangeDesc.RegisterSpace = 0;						// space0
 		UAVRangeDesc.OffsetInDescriptorsFromTableStart = 0;
 
-		// 根描述表结构体
-		D3D12_ROOT_DESCRIPTOR_TABLE RootDescriptorTableDesc = {};
-		RootDescriptorTableDesc.NumDescriptorRanges = 1;
-		RootDescriptorTableDesc.pDescriptorRanges = &UAVRangeDesc;
-
-		RootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-		RootParameters[1].DescriptorTable = RootDescriptorTableDesc;
-		RootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		RootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		RootParameters[2].DescriptorTable.NumDescriptorRanges = 1;
+		RootParameters[2].DescriptorTable.pDescriptorRanges = &UAVRangeDesc;
+		RootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 
 
 		// 根签名信息结构体，上限 64 DWORD，静态采样器不占用根签名
 		D3D12_ROOT_SIGNATURE_DESC RootSignatureDesc = {};
-		RootSignatureDesc.NumParameters = 2;				// 两个根参数
+		RootSignatureDesc.NumParameters = 3;				// 三个根参数
 		RootSignatureDesc.pParameters = RootParameters;		// 根参数数组指针
 		RootSignatureDesc.NumStaticSamplers = 0;
 		RootSignatureDesc.pStaticSamplers = nullptr;
@@ -1670,7 +1792,6 @@ public:
 
 
 		// 编译根签名，让根签名先编译成 GPU 可读的二进制字节码
-		// 其实 "Serialize" 是 "序列化" 的意思，意思是将上述的根签名信息整理成一个有标准格式，API 可读的二进制字节码...
 		D3D12SerializeRootSignature(&RootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &SignatureBlob, &ErrorBlob);
 		if (ErrorBlob)
 		{
@@ -1680,26 +1801,26 @@ public:
 
 		// 用这个二进制字节码创建根签名对象
 		m_D3D12Device->CreateRootSignature(0, SignatureBlob->GetBufferPointer(), SignatureBlob->GetBufferSize(),
-			IID_PPV_ARGS(&m_ComputeRootSignature));
+			IID_PPV_ARGS(&m_NoiseRootSignature));
 	}
 
 
-	// 创建专门用于计算着色器的 PSO，计算着色器不属于常规管线，但它仍然需要 PSO
-	void STEP23_CreateComputePSO()
+	// 创建专门用于 NoiseShader 的 PSO
+	void STEP22_CreateNoisePSO()
 	{
 		// 计算着色器使用的 PSO 信息结构体，注意类型是 D3D12_COMPUTE_PIPELINE_STATE_DESC
 		D3D12_COMPUTE_PIPELINE_STATE_DESC ComputePSODesc = {};
 
 		// 第一次绑定根签名，使用的是上面的 m_ComputeRootSignature
 		// 本次设置是将根签名与 PSO 绑定，生成对应版本的根签名适配 PSO，设置渲染管线的输入参数状态
-		ComputePSODesc.pRootSignature = m_ComputeRootSignature.Get();
+		ComputePSODesc.pRootSignature = m_NoiseRootSignature.Get();
 
 
 		ComPtr<ID3DBlob> ComputeShaderBlob;		// 计算着色器二进制字节码
 		ComPtr<ID3DBlob> ErrorBlob;				// 错误字节码
 
-		// 编译计算着色器 Compute Shader
-		D3DCompileFromFile(L"NoiseShader.hlsl", nullptr, nullptr, "CSMain", "cs_5_1", NULL, NULL, &ComputeShaderBlob, &ErrorBlob);
+		// 编译 NoiseShader 的 NoiseCSMain
+		D3DCompileFromFile(L"NoiseShader.hlsl", nullptr, nullptr, "NoiseCSMain", "cs_5_1", NULL, NULL, &ComputeShaderBlob, &ErrorBlob);
 		if (ErrorBlob)
 		{
 			OutputDebugStringA((const char*)ErrorBlob->GetBufferPointer());
@@ -1712,194 +1833,34 @@ public:
 		// 不使用特殊标志
 		ComputePSODesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
 
-		// 创建计算着色器专用 PSO
-		m_D3D12Device->CreateComputePipelineState(&ComputePSODesc, IID_PPV_ARGS(&m_ComputePSO));
+		// 创建用于地形生成的 NoisePSO
+		m_D3D12Device->CreateComputePipelineState(&ComputePSODesc, IID_PPV_ARGS(&m_NoisePSO));
 	}
 
 
-	// 设置计算着色器渲染管线，启动 GPU 调度线程组进行通用计算，使用柏林噪声计算并生成高度图
-	void STEP24_GenerateHeightMap()
+	// 创建用于 UAV 纹理数组 回读的两个资源屏障，这两个资源屏障用于回读高度图的资源转换
+	void STEP23_CreateHeightMapBarrier()
 	{
-		// 先重置命令分配器，命令分配器本质上是一个环形缓冲区，将读取命令的指针重置到缓冲区起始点
-		m_CommandAllocator->Reset();
-		// 再重置命令列表，使命令列表处于 Record 状态，开启命令的记录
-		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);
-
-		// 注意下面的指令都是 Compute 版本的，要用到 GPU 的 Compute Engine 计算引擎，不要写错！
-
-		// 第二次设置根签名，本次检测 PSO 根签名的合法性 (引用资源是否匹配)，检测成功会开启显存与寄存器的映射通道
-		m_CommandList->SetComputeRootSignature(m_ComputeRootSignature.Get());
-		// 设置渲染管线状态
-		m_CommandList->SetPipelineState(m_ComputePSO.Get());
-		
-		// 设置第一个根参数：32 位 CBV 根常量 (世界种子)
-		m_CommandList->SetComputeRoot32BitConstant(0, WorldSeed, 0);
-
-		// 用于设置描述符堆用的临时 ID3D12DescriptorHeap 数组
-		ID3D12DescriptorHeap* _temp_DescriptorHeaps[] = { m_SRVUAVHeap.Get() };
-		// 设置描述符堆，GPU 自己不能找到描述符堆，这个指令会向 GPU 传递并绑定描述符堆的基地址
-		// 这样下面就能进行 SetXXXRootTable 设置 "偏移量" 进行描述符绑定的快速切换了，驱动和硬件就能做大量的缓存和优化 
-		// 这个指令是一个开销比较大的指令，官方建议一帧只调用一次或两次
-		// SetDescriptorHeaps 就相当于你把一个很重的书架挪过来了，而描述符就相当于书架上每本书的索引编号
-		m_CommandList->SetDescriptorHeaps(1, _temp_DescriptorHeaps);
-
-		// 设置第二个根参数：UAV 纹理 (高度图)
-		// 没有上面 SetDescriptorHeaps 设置的话，GPU 句柄是无效的，因为没有书架，给你索引你也找不到书
-		m_CommandList->SetComputeRootDescriptorTable(1, UAVHeightMap_GPUHandle);
+		// UAVToCopySource_barrier 屏障：Unordered Access 无序访问状态 -> Copy Source 复制源状态
+		// 描述符只描述资源的用途与布局，CPU 回读 UAV 纹理数组 的数据，说明 UAV 资源用途发生了改变，需要进行屏障转换
+		// 如果没有下面这两个资源屏障的话，默认堆 -> 回读堆 的复制操作会失败，或者发生数据错误，调试层报 D3D12 ERROR
+		UAVToCopySource_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		UAVToCopySource_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		UAVToCopySource_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+		UAVToCopySource_barrier.Transition.pResource = m_UAVHeightTextureArray_DefaultResource.Get();
+		// 注意这里！我们设置的是纹理数组，这个 Subresource 指的是要设置屏障的子资源索引！
+		// 我们所有纹理子资源都要进行屏障转换，直接用 DX12 给的 ALL_SUBRESOURCES 宏定义
+		UAVToCopySource_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
 
-		// 调度 GPU 线程组，开始计算！
-		// 注意！这三个参数指的是 XYZ 轴方向分别要调度多少线程组 (单位是线程组，不是单个线程的数量，不要搞错)
-		// 我们调动 10x10=100 个线程组，每个线程组负责 UAV 纹理的一块 10x10 的区域 [numthreads(10, 10, 1)]
-		// X = 10x10 = 100，Y = 10x10 = 100，合起来就是整个 UAV 纹理的大小
-		// shader 里面指定 SV_DispatchThreadID 语义，配合这个指令，可以直接获得单个线程的全局索引
-		m_CommandList->Dispatch(ThreadGroupsAxisXNums, ThreadGroupsAxisYNums, 1);
-
-
-		// 关闭命令列表，Record 录制状态 -> Close 关闭状态，命令列表只有关闭才可以提交
-		m_CommandList->Close();
-
-		// 用于传递命令用的临时 ID3D12CommandList 数组
-		ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
-
-		// 执行上文的计算命令！
-		m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
-
-
-		// 将围栏预定值设定为下一帧
-		FenceValue++;
-		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
-		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
-		// 设置围栏的预定事件，当计算完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
-		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
-
-
-		// 强制让 CPU 主线程等待 GPU 执行完成，等会我们还要把 UAV 纹理的数据读回 CPU
-		WaitForSingleObject(RenderEvent, INFINITE);
-	}
-
-
-
-	// ---------------------------------------------------------------------------------------------------------------
-
-
-
-	// 计算着色器得到的结果是一个高度图平面，我们需要从 UAV 纹理中读取这个高度图，利用最大高度生成方块柱
-	// UAV 纹理资源在默认堆，想要读回 CPU，我们要介绍一位大家都了解过的新朋友：Readback Heap 回读堆
-	// 回读堆在 Shared Memory 共享内存，是 GPU 只写，CPU 只读的，非常适合用于读取计算着色器的结果
-	// 创建用于读取高度图的回读堆资源
-	void STEP25_CreateReadbackResource()
-	{
-		// 计算每行大小，UAV 纹理回读同样需要 256 对齐
-		// D3D12_TEXTURE_DATA_PITCH_ALIGNMENT = 256
-		// 纹理格式是 DXGI_FORMAT_R32_FLOAT，每个像素占 4 个字节 (R32)
-		ReadbackResourceRowSize = Ceil(TerrianGridWidth * 4, 256) * 256;
-
-		// 计算总共需要分配的资源大小，计算公式和上文算纹理一样
-		ReadbackResourceSize = ReadbackResourceRowSize * (TerrianGridHeight - 1) + TerrianGridWidth * 4;
-
-
-		// 用于回读堆高度图资源的结构体信息 (和上传堆创建方法和结构体参数都一样的，线性数据资源)
-		D3D12_RESOURCE_DESC ReadbackHeightMapDesc = {};
-		ReadbackHeightMapDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-		ReadbackHeightMapDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-		ReadbackHeightMapDesc.Width = ReadbackResourceSize;
-		ReadbackHeightMapDesc.Height = 1;
-		ReadbackHeightMapDesc.Format = DXGI_FORMAT_UNKNOWN;
-		ReadbackHeightMapDesc.DepthOrArraySize = 1;
-		ReadbackHeightMapDesc.MipLevels = 1;
-		ReadbackHeightMapDesc.SampleDesc.Count = 1;
-
-
-		// 创建回读堆资源，注意初始状态是 D3D12_RESOURCE_STATE_COPY_DEST 复制目标状态
-		// COPY_DEST 状态的回读堆资源，是可以直接进行 Map-Unmap 操作，被 CPU 读取的
-		m_D3D12Device->CreateCommittedResource(&ReadbackHeapDesc, D3D12_HEAP_FLAG_NONE,
-			&ReadbackHeightMapDesc, D3D12_RESOURCE_STATE_COPY_DEST,
-			nullptr, IID_PPV_ARGS(&m_UAVTerrianHeightMap_ReadbackResource));
-	}
-
-
-	// 向 GPU 发送指令，将 UAV 纹理高度图从默认堆复制到回读堆，后续 CPU 才能读取这个回读堆高度图的数据
-	void STEP26_CopyHeightMapToReadbackResource()
-	{
-		// 用于复制 UAV 纹理的资源脚本
-		D3D12_PLACED_SUBRESOURCE_FOOTPRINT CopyHeightMapFootprint = {};
-
-		// 我们要复制的是 UAV 纹理，需要获取它的默认堆结构体信息
-		D3D12_RESOURCE_DESC HeightMapDefaultResourceDesc = m_UAVTerrianHeightMap_DefaultResource->GetDesc();
-
-		// 获取资源脚本
-		m_D3D12Device->GetCopyableFootprints(&HeightMapDefaultResourceDesc,
-			0, 1, 0, &CopyHeightMapFootprint, nullptr, nullptr, nullptr);
-
-
-		// 复制资源需要使用 GPU 的 CopyEngine 复制引擎，所以需要向命令队列发出复制命令
-		m_CommandAllocator->Reset();								// 先重置命令分配器
-		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);	// 再重置命令列表
-
-
-		// 首先需要转换 UAV 默认堆纹理资源的状态，利用资源屏障将 UAV 纹理转换到 COPY_SOURCE 复制源状态
-		// 将 UAV HeightMap 由 UNORDERED_ACCESS 转换到 COPY_SOURCE 的资源屏障
-		D3D12_RESOURCE_BARRIER UAVMapToCopySourceBarrier = {};
-		UAVMapToCopySourceBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		UAVMapToCopySourceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-		UAVMapToCopySourceBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-		UAVMapToCopySourceBarrier.Transition.pResource = m_UAVTerrianHeightMap_DefaultResource.Get();
-
-		// 设置 UAV HeightMap 的资源屏障
-		m_CommandList->ResourceBarrier(1, &UAVMapToCopySourceBarrier);
-
-
-		// 复制目标位置 (回读堆资源) 结构体
-		D3D12_TEXTURE_COPY_LOCATION DstLocation = {};
-		// 指定资源的用途是一个使用复制脚本的缓冲区 (复制脚本只能用于缓冲，描述一个纹理数据在缓冲区中的精确布局)
-		DstLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-		// 复制脚本 (只有指定上面是复制脚本类型才能用)
-		DstLocation.PlacedFootprint = CopyHeightMapFootprint;
-		// 要复制到的目标资源 (回读堆资源)
-		DstLocation.pResource = m_UAVTerrianHeightMap_ReadbackResource.Get();
-
-		// 复制源位置 (默认堆资源) 结构体
-		D3D12_TEXTURE_COPY_LOCATION SrcLocation = {};
-		// 指定资源的用途是一块纹理子资源
-		SrcLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-		// 复制的子资源索引 (只有指定上面是纹理子资源类型才能用)
-		SrcLocation.SubresourceIndex = 0;
-		// 被复制的资源 (默认堆资源)
-		SrcLocation.pResource = m_UAVTerrianHeightMap_DefaultResource.Get();
-
-
-		// 记录复制 默认堆资源 到 回读堆资源 的命令 (显存 -> 共享内存) 
-		m_CommandList->CopyTextureRegion(&DstLocation, 0, 0, 0, &SrcLocation, nullptr);
-
-
-		// 关闭命令列表，Record 录制状态 -> Close 关闭状态，命令列表只有关闭才可以提交
-		m_CommandList->Close();
-
-		// 用于传递命令用的临时 ID3D12CommandList 数组
-		ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
-
-		// 执行上文的复制命令！
-		m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
-
-
-
-		// 将围栏预定值设定为下一帧
-		FenceValue++;
-		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
-		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
-		// 设置围栏的预定事件，当计算完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
-		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
-
-
-		// 强制让 CPU 主线程等待 GPU 执行完成，正在被 GPU 复制的资源，CPU 不可以进行 Map-Unmap 操作
-		// 必须等待复制完成才可以进行读取，否则会发生资源冲突
-		WaitForSingleObject(RenderEvent, INFINITE);
-
-		// GPU 复制完成后，经过上面的 WaitForSingleObject 会自动将事件转换为无信号状态
-		// SetEvent 设置事件为有信号状态，不然就会在下文 MsgWaitForMultipleObjects 卡住
-		// case 1 进都进不去，一直返回 0 导致窗口虽然能操作但是一直白屏
-		SetEvent(RenderEvent);
+		// CopySourceToUAV_barrier 屏障：Copy Source 复制源状态 -> Unordered Access 无序访问状态
+		// 当复制完成后，转换到无序访问状态，供下一次生成区块的计算着色器使用，如此循环往复
+		CopySourceToUAV_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		CopySourceToUAV_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+		CopySourceToUAV_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		CopySourceToUAV_barrier.Transition.pResource = m_UAVHeightTextureArray_DefaultResource.Get();
+		// 所有纹理子资源都要进行屏障转换
+		CopySourceToUAV_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	}
 
 
@@ -1909,7 +1870,7 @@ public:
 
 
 	// 创建专门用于渲染方块的根签名
-	void STEP27_CreateRenderRootSignature()
+	void STEP24_CreateRenderRootSignature()
 	{
 		// RenderRootSignature 的根参数 + 静态采样器列表
 		// Para 0: (Type = Root Descriptor,  2 DWORD)  (b0, space0) CBV 根描述符，用于常量缓冲
@@ -1947,13 +1908,9 @@ public:
 		SRVRangeDesc.RegisterSpace = 0;						// space0
 		SRVRangeDesc.OffsetInDescriptorsFromTableStart = 0;
 
-		// 根描述表信息结构体
-		D3D12_ROOT_DESCRIPTOR_TABLE RootDescriptorTableDesc = {};	
-		RootDescriptorTableDesc.pDescriptorRanges = &SRVRangeDesc;
-		RootDescriptorTableDesc.NumDescriptorRanges = 1;
-
 		RootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-		RootParameters[2].DescriptorTable = RootDescriptorTableDesc;
+		RootParameters[2].DescriptorTable.pDescriptorRanges = &SRVRangeDesc;
+		RootParameters[2].DescriptorTable.NumDescriptorRanges = 1;
 		RootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 
@@ -2000,7 +1957,7 @@ public:
 
 
 	// 创建专门用于渲染方块的 PSO
-	void STEP28_CreateRenderBlockPSO()
+	void STEP25_CreateRenderBlockPSO()
 	{
 		// PSO 信息结构体
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC PSODesc = {};
@@ -2025,7 +1982,7 @@ public:
 		InputElementDesc[1].SemanticName = "TEXCOORD";
 		InputElementDesc[1].SemanticIndex = 0;
 		InputElementDesc[1].Format = DXGI_FORMAT_R32G32_FLOAT;
-		InputElementDesc[1].InputSlot = 0;	
+		InputElementDesc[1].InputSlot = 0;
 		InputElementDesc[1].AlignedByteOffset = 16;
 		InputElementDesc[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 		InputElementDesc[1].InstanceDataStepRate = 0;
@@ -2145,7 +2102,37 @@ public:
 		PSODesc.SampleMask = UINT_MAX;
 
 		// 创建用于渲染方块的 m_RenderBlockPSO 对象
-		m_D3D12Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&m_RenderBlockPSO));
+		m_D3D12Device->CreateGraphicsPipelineState(&PSODesc, IID_PPV_ARGS(&m_RenderPSO));
+	}
+
+
+	// 创建专门用于 RenderShader 的常量缓冲资源
+	void STEP26_CreateRenderCBVResource()
+	{
+		// 常量资源宽度，这里填整个结构体的大小，注意 256 字节对齐！
+		// D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT = 256
+		UINT CBufferWidth = Ceil(sizeof(RenderCBuffer), 256) * 256;
+
+		// 常量缓冲 (上传堆) 资源结构体
+		D3D12_RESOURCE_DESC CBVResourceDesc = {};
+		CBVResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		CBVResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		CBVResourceDesc.Width = CBufferWidth;
+		CBVResourceDesc.Height = 1;
+		CBVResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+		CBVResourceDesc.DepthOrArraySize = 1;
+		CBVResourceDesc.MipLevels = 1;
+		CBVResourceDesc.SampleDesc.Count = 1;
+
+		// 上传堆属性的结构体，上传堆位于 CPU 和 GPU 的共享内存
+		D3D12_HEAP_PROPERTIES UploadHeapDesc = { D3D12_HEAP_TYPE_UPLOAD };
+
+		// 创建常量缓冲资源
+		m_D3D12Device->CreateCommittedResource(&UploadHeapDesc, D3D12_HEAP_FLAG_NONE, &CBVResourceDesc,
+			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_CBVRenderBlock_UploadResource));
+
+		// 常量缓冲直接 Map 映射到结构体指针就行即可，不需要再 Unmap，小数据下常量缓冲传递效率很高
+		m_CBVRenderBlock_UploadResource->Map(0, nullptr, reinterpret_cast<void**>(&RenderCBufferPointer));
 	}
 
 
@@ -2155,7 +2142,7 @@ public:
 
 
 	// 创建顶点流的顶点缓冲和索引缓冲，用的是 VBV0 和 IBV
-	void STEP29_CreatePerVertexAndIndexBuffer()
+	void STEP27_CreatePerVertexAndIndexBuffer()
 	{
 		// 上传堆顶点资源结构体
 		D3D12_RESOURCE_DESC VertexResourceDesc = {};
@@ -2212,99 +2199,14 @@ public:
 	}
 
 
-
-	// 创建实例流缓冲，从回读堆高度图中读取高度，并应用于方块实例中，生成方块柱，用的是 VBV1
-	void STEP30_CreatePerInstanceBuffer()
+	// 创建实例流缓冲资源，最大能容纳 121 个 16x16x24 的区块，用的是 VBV1
+	void STEP28_CreatePerInstanceBuffer()
 	{
-		// 指向回读堆高度图的临时指针 (工具人)，注意它的类型是 float (四个字节)！千万不要和下面搞错！
-		float* HeightMapPointer = nullptr;
-
-		// 从起始到整个资源大小的范围，不填这个会有一个 D3D12 Warning，虽然没有什么影响，但个人建议还是要填
-		D3D12_RANGE HeightMapRange = { 0, ReadbackResourceSize };
-
-		// 获取回读堆资源首地址，此时回读堆高度图已经复制完毕了，可以通过 Map 获得资源地址直接访问
-		m_UAVTerrianHeightMap_ReadbackResource->Map(0, &HeightMapRange, reinterpret_cast<void**>(&HeightMapPointer));
-
-
-		// 最为重要的一步！上文 GPU 计算高度图速度很快的，即使是破集显也可以轻松应对，不要小看计算着色器
-		// 如果你想做性能优化，首先先要从这里！CPU 添加大量实例方块做起，因为这个极其考验读者你们的手动优化能力！
-
-
-		// vector 先 reserve 预分配数据，这是优化的第一步，先分配 平均生成高度 * 整个网格平面 的大小
-		BlockGroup.reserve(12 * TerrianGridWidth * TerrianGridHeight);
-
-		// 因为我们上文指定了回读堆大小是 256 对齐的，会有对齐产生的空位，这里还要算资源每行 = 多少个 float，否则下面数据会读错
-		const int FloatPerRow = ReadbackResourceRowSize / sizeof(float);
-
-
-		// 高度图存储了一个 100x100 平面的最大高度数据，我们要利用这些高度数据生成方块柱，最低高度是 0
-		// GridX 网格 x 轴方向 = HeightMapTexcoordU 高度图纹理 U 轴方向 = DX 坐标系 x 轴方向
-		// GridY 网格 y 轴方向 = HeightMapTexcoordV 高度图纹理 V 轴方向 = DX 坐标系 z 轴方向
-
-		for (int GridX = 0; GridX < TerrianGridWidth; GridX++)		// 网格 x 轴方向
-		{
-			for (int GridY = 0; GridY < TerrianGridHeight; GridY++)	// 网格 y 轴方向
-			{
-				// 获取当前网格的最大高度的原始数据 (RWTexture2D<float>)
-				// *(HeightMapPointer + GridY * FloatPerRowSize + GridX) = HeightMap[GridY][GridX]
-				// 注意！每行的偏移大小是 FloatPerRowSize！
-				const float RawHeight = *(HeightMapPointer + GridY * FloatPerRow + GridX);
-
-				// 对原始数据四舍五入，就能得到我们可以用的最大高度
-				const int CurrentGridMaxHeight = round(RawHeight);
-
-				// 地层随机概率因子，用于区分地层 (岩石层还是泥土层)，每次增加高度会累增随机概率，概率大于 1 切换地层
-				// 地形轮廓是随世界种子在计算着色器固定的，但方块 (地层) 分布用的是随时间变化的白噪声
-				float StratumRandomFactor = 0;
-
-
-				// 从 0 开始遍历 DX 坐标系 y 轴方向，生成方块柱
-				for (int z = 0; z <= CurrentGridMaxHeight; z++)
-				{
-					BLOCKINSTANCE NewBlock = {};		// 新方块实例
-					NewBlock.BlockOffset.x = GridX;		// 当前网格 x 轴坐标
-					NewBlock.BlockOffset.y = z;			// 当前网格 y 轴坐标
-					NewBlock.BlockOffset.z = GridY;		// 当前网格 z 轴坐标
-
-					// 最底层方块是基岩
-					if (z == 0)
-					{
-						NewBlock.BlockType = 3;
-					}
-					// 包括 y = 4 以下都是石头，暂时先这样定义
-					else if (z <= 4)
-					{
-						NewBlock.BlockType = 2;
-					}
-					// 剩下的是泥土
-					else
-					{
-						NewBlock.BlockType = 0;
-					}
-
-					// 新增方块实例
-					BlockGroup.push_back(NewBlock);
-				}
-
-
-				// 如果最高的方块的类型是泥土，就变成草方块
-				if (BlockGroup[BlockGroup.size() - 1].BlockType == 0)
-				{
-					BlockGroup[BlockGroup.size() - 1].BlockType = 1;
-				}
-			}
-		}
-
-
-		// 已经获取完毕了，高度图直接 Unmap 就行
-		m_UAVTerrianHeightMap_ReadbackResource->Unmap(0, nullptr);
-
-
-		// 上传堆实例资源结构体
+		// 上传堆实例资源结构体，注意资源大小！
 		D3D12_RESOURCE_DESC InstanceResourceDesc = {};
 		InstanceResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
 		InstanceResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-		InstanceResourceDesc.Width = BlockGroup.size() * sizeof(BLOCKINSTANCE);
+		InstanceResourceDesc.Width = MaxKeepChunkCount * MaxChunkInstanceCount * sizeof(BLOCK_INSTANCE);
 		InstanceResourceDesc.Height = 1;
 		InstanceResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
 		InstanceResourceDesc.DepthOrArraySize = 1;
@@ -2316,22 +2218,13 @@ public:
 			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_BlockInstanceResource));
 
 
-		// 用于上传数据的临时指针 (工具人)，注意它的类型是 BYTE (一个字节)！千万不要和上面搞错！
-		BYTE* TransferPointer = nullptr;	
-
-		// 将数据复制到上传堆资源，开启映射
-		m_BlockInstanceResource->Map(0, nullptr, reinterpret_cast<void**>(&TransferPointer));
-		// 将 BlockGroup 里面的所有数据复制到上传堆资源中
-		memcpy(TransferPointer, &BlockGroup[0], BlockGroup.size() * sizeof(BLOCKINSTANCE));
-		// 结束映射，加速 GPU 对静态资源的访问
-		m_BlockInstanceResource->Unmap(0, nullptr);
-
-
-
-		// 填写 VBV1 结构体
+		// 填写 VBV1 结构体，注意资源大小！
 		VertexBufferView[1].BufferLocation = m_BlockInstanceResource->GetGPUVirtualAddress();
-		VertexBufferView[1].StrideInBytes = sizeof(BLOCKINSTANCE);
-		VertexBufferView[1].SizeInBytes = BlockGroup.size() * sizeof(BLOCKINSTANCE);
+		VertexBufferView[1].StrideInBytes = sizeof(BLOCK_INSTANCE);
+		VertexBufferView[1].SizeInBytes = MaxKeepChunkCount * MaxChunkInstanceCount * sizeof(BLOCK_INSTANCE);
+
+		// 进行实例化资源的持续化映射
+		m_BlockInstanceResource->Map(0, nullptr, reinterpret_cast<void**>(&BlockInstanceMapPointer));
 	}
 
 
@@ -2340,21 +2233,406 @@ public:
 
 
 
-	// 更新常量缓冲区，将每帧新的常量数据传递到常量缓冲区中，这样就能看到动态的 3D 画面了
-	void UpdateConstantBuffer()
+	// 以区块左上角 xz 坐标拼接变成的整数作为哈希表键
+	inline UINT64 ChunkInMapKey(int ChunkX, int ChunkZ)
 	{
-		// 将更新后的矩阵，存储到共享内存上的常量缓冲，这样 GPU 就可以访问到 MVP 矩阵了
-		XMStoreFloat4x4(&m_ConstantBuffer->MVPMatrix, m_FirstCamera.GetMVPMatrix());
+		return ((UINT64)ChunkX << 32) | (UINT32)ChunkZ;
+	}
+
+
+	// 初始化区块相关联的容器 (数据结构)
+	void STEP29_InitChunkContainer()
+	{
+		// 做占位用的空区块结构体
+		CHUNK EmptyChuckSpace = {};
+		// 区块缓冲先推入 121 个空泡，之后大小就固定了，不会再变了
+		ChunkMetaDataHiveBuffer.resize(MaxKeepChunkCount, EmptyChuckSpace);
+
+
+		// 最开始区块实例缓冲没有实例，全是空位，循环从大到小推入 "空泡" 索引到空闲栈中
+		// 栈是先入先出的，栈顶 "空泡" 是缓冲第一个元素的索引 0
+		for (int i = MaxKeepChunkCount - 1; i >= 0; i--)
+		{
+			FreeChunkSpaceStack.push(i);
+		}
 	}
 
 
 
-	// 渲染
-	void Render()
-	{
-		// 每帧渲染开始前，调用 UpdateConstantBuffer() 更新常量缓冲区
-		UpdateConstantBuffer();
+	// ---------------------------------------------------------------------------------------------------------------
 
+
+
+	// 更新每帧数据，包括每帧的 MVP 矩阵数据，以及区块加载信息
+	void UpdateFrameData()
+	{
+		// 将更新后的矩阵，存储到共享内存上的常量缓冲，这样 GPU 就可以访问到 MVP 矩阵了
+		XMStoreFloat4x4(&RenderCBufferPointer->MVPMatrix, m_FirstCamera.GetMVPMatrix());
+
+
+
+		// 获取玩家当前位置
+		XMVECTOR CameraPosition = m_FirstCamera.GetEyePosition();
+
+		// 获取玩家所处区块左上角 xz 坐标，一个区块 16x16
+		int CurrentChunkX = floor(XMVectorGetX(CameraPosition) / ChunkSideLength) * ChunkSideLength;
+		int CurrentChunkZ = floor(XMVectorGetZ(CameraPosition) / ChunkSideLength) * ChunkSideLength;
+
+
+
+		// 遍历哈希表，先检查所有已加载区块，如果有区块已经脱离了保持范围，就进行卸载
+		{
+			// 临时存储哈希表中要卸载的区块键的 vector
+			std::vector<UINT64> _temp_UnloadChunkHashKeyList;
+
+
+			// 遍历哈希表，如果有区块脱离了最大保持范围，先记录需要卸载的键
+			// 因为在任何容器进行自身对象的范围 for 遍历，同时还要删除自身迭代器，是相当危险的
+			// 下面的范围 for 支持 [key, value] 这种键值对元素的简洁写法
+			for (auto& [key, index] : ChunkSearchMap)
+			{
+				// 当前遍历区块左上角的 xz 坐标
+				int SearchMapChunkX = ChunkMetaDataHiveBuffer[index].ChunkXZ.x;
+				int SearchMapChunkZ = ChunkMetaDataHiveBuffer[index].ChunkXZ.y;
+
+				// 原版游戏计算区块距离，采用的就是 Chebyshev Distance 切比雪夫距离
+				// 它计算的是玩家与区块平面 xz 轴距离的绝对值，结果是两者中最大的绝对值: max(|dx|, |dz|)
+				// 切比雪夫的优点是计算量极少，完美与平面正方形网格 (区块) 对齐
+				int distance = std::max(std::abs(SearchMapChunkX - CurrentChunkX), std::abs(SearchMapChunkZ - CurrentChunkZ));
+
+
+				// 如果某个区块在保持范围之外，暂时不需要加载它了，给这个区块加入卸载列表
+				// 注意！最大保持半径 (5) 要乘以区块边长！因为上面相减得到的距离是以方块边长为粒度的！
+				if (distance > (MaxUnloadRadius - 1) * ChunkSideLength)
+				{
+					// 加入卸载标志
+					ChunkMetaDataHiveBuffer[index].State = UNLOAD;
+					// 需要卸载的区块实例偏移清零
+					ChunkMetaDataHiveBuffer[index].InstanceOffset = 0;
+					// 需要卸载的区块实例数量清零
+					ChunkMetaDataHiveBuffer[index].InstanceCount = 0;
+
+
+					// 将哈希键加入到卸载列表
+					_temp_UnloadChunkHashKeyList.push_back(key);
+					// 区块元素被删除，原地变成 "空泡"，空闲栈推入新 "空泡" 索引，方便数据复用
+					FreeChunkSpaceStack.push(index);
+				}
+			}
+
+
+			// 哈希表根据卸载列表，逐一删除键值对
+			for (const auto& key : _temp_UnloadChunkHashKeyList)
+			{
+				ChunkSearchMap.erase(key);
+			}
+		}
+
+
+
+		// 以玩家自身所在的区块为中心，计算所需要加载的区块，如果在哈希表上找到了已存在的区块，就保持加载
+		// 哈希表找不到，说明是新区块，加入待加载列表中，等会在 Render 进行真正的加载
+		{
+			// 遍历玩家周围所有的可加载区块 (9x9=81 正方体范围)
+			// x/z 指的是相对玩家自身区块的 x/z 轴偏移索引，-4 <= ChunkIndex <= 4
+			for (int x = 1 - MaxCreateRadius; x <= MaxCreateRadius - 1; x++)
+			{
+				for (int z = 1 - MaxCreateRadius; z <= MaxCreateRadius - 1; z++)
+				{
+					// 获取该区块左上角坐标
+					int ChunkX = CurrentChunkX + x * ChunkSideLength;
+					int ChunkZ = CurrentChunkZ + z * ChunkSideLength;
+
+					// 获取区块的哈希键
+					UINT64 HashKey = ChunkInMapKey(ChunkX, ChunkZ);
+
+					// 如果在哈希表上没找到区块，说明是需要加载的新区块
+					if (ChunkSearchMap.find(HashKey) == ChunkSearchMap.end())
+					{
+						// 新区块会占用一个空间，从空闲栈获取一个最近的"空泡"
+						UINT NewChunkIndex = FreeChunkSpaceStack.top();
+						// 新区块使用了"空泡"，栈顶弹出元素
+						FreeChunkSpaceStack.pop();
+
+
+						CHUNK NewChunk = {};		// 新区块信息结构体
+						// 新区块处于待加载状态
+						NewChunk.State = CREATE;
+						// 新区块左上角坐标
+						NewChunk.ChunkXZ = { ChunkX, ChunkZ };
+						// 指定新区块新的实例偏移
+						NewChunk.InstanceOffset = NewChunkIndex * MaxChunkInstanceCount;
+						// 新区块还没加载，实例数量暂时先清零
+						NewChunk.InstanceCount = 0;
+
+
+						// 区块实例缓冲添加新区块
+						ChunkMetaDataHiveBuffer[NewChunkIndex] = NewChunk;
+						// 哈希表添加新键值对
+						ChunkSearchMap[HashKey] = NewChunkIndex;
+						// 待加载列表添加新区块
+						ReadyCreateChunkBuffer.push_back(NewChunk);
+					}
+				}
+			}
+		}
+	}
+
+
+
+	// 开启 NoiseShader 计算区块高度图，并复制到回读堆资源的渲染分支
+	void RenderBranch_GenerateNewChunkHeightMap()
+	{
+		// 更新 SRV 待加载生成区块缓冲，注意每个元素是 XMINT2
+		// StructuredBuffer<int2> m_ReadyCreateChunkBuffer : register(t0, space0);
+		for (UINT i = 0; i < ReadyCreateChunkBuffer.size(); i++)
+		{
+			memcpy(ReadyCreateChunkPointer + i * sizeof(XMINT2),
+				&ReadyCreateChunkBuffer[i].ChunkXZ, sizeof(XMINT2));
+		}
+
+
+
+		// 先重置命令分配器
+		m_CommandAllocator->Reset();
+		// 再重置命令列表，Close 关闭状态 -> Record 录制状态
+		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);
+
+
+
+		// 用于设置描述符堆用的临时 ID3D12DescriptorHeap 数组
+		ID3D12DescriptorHeap* _temp_DescriptorHeaps[] = { m_SRVUAVHeap.Get() };
+		// 设置描述符堆，描述符堆表示了根描述表第二次寻址，寻找描述符需要的基地址
+		m_CommandList->SetDescriptorHeaps(1, _temp_DescriptorHeaps);
+
+		// 设置 NoiseRootSignature
+		// 第二次设置根签名，本次检测 PSO 根签名的合法性 (引用资源是否匹配)，检测成功会开启显存与寄存器的映射通道
+		m_CommandList->SetComputeRootSignature(m_NoiseRootSignature.Get());
+
+		// 设置 NoisePSO
+		m_CommandList->SetPipelineState(m_NoisePSO.Get());
+
+		// 设置第一个根参数：32 位根常量 (世界种子)
+		m_CommandList->SetComputeRoot32BitConstant(0, WorldSeed, 0);
+
+		// 设置第二个根参数：SRV 根描述符 (待加载区块列表)
+		m_CommandList->SetComputeRootShaderResourceView(1,
+			m_SRVReadyCreateChunkBuffer_UploadResource->GetGPUVirtualAddress());
+
+		// 设置第三个根参数：根描述表 (UAV 高度图纹理数组)
+		m_CommandList->SetComputeRootDescriptorTable(2, UAVHeightTextureArray_GPUHandle);
+
+
+
+		// 根据需要加载的区块数量，调度相应的线程，开始计算
+		// 需要加载的高度图，调度的线程组 = 需要加载区块的数量，每个线程组对应 UAV 纹理数组一块高度图
+		m_CommandList->Dispatch(ReadyCreateChunkBuffer.size(), 1, 1);
+
+
+		// 计算完成后，将 UAV 纹理数组转换成可以用于复制的状态
+		m_CommandList->ResourceBarrier(1, &UAVToCopySource_barrier);
+
+		// 资源脚本，描述要复制的资源，UAV 纹理数组每个元素都要复制一次
+		std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> PlacedFootprints(ReadyCreateChunkBuffer.size());
+
+		// UAV 默认堆纹理数组资源结构体
+		D3D12_RESOURCE_DESC DefaultResourceDesc = m_UAVHeightTextureArray_DefaultResource->GetDesc();
+
+		// 获取纹理复制脚本，用于下文的纹理复制
+		m_D3D12Device->GetCopyableFootprints(&DefaultResourceDesc, 0, ReadyCreateChunkBuffer.size(), 0,
+			&PlacedFootprints[0], nullptr, nullptr, nullptr);
+
+		// 复制 UAV 纹理数组到回读堆，每个子资源 (纹理数组元素) 都要调用一次 CopyTextureRegion 指令
+		for (UINT i = 0; i < ReadyCreateChunkBuffer.size(); i++)
+		{
+			// 复制目标位置 (回读堆资源) 结构体
+			D3D12_TEXTURE_COPY_LOCATION DstLocation = {};
+			// 指定资源的用途是一个使用复制脚本的缓冲区
+			DstLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+			// 选择第 i 个复制脚本
+			DstLocation.PlacedFootprint = PlacedFootprints[i];
+			// 要复制到的目标资源 (回读堆资源)
+			DstLocation.pResource = m_UAVHeightTextureArray_ReadbackResource.Get();
+
+			// 复制源位置 (默认堆资源) 结构体
+			D3D12_TEXTURE_COPY_LOCATION SrcLocation = {};
+			// 指定资源的用途是一块纹理子资源
+			SrcLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+			// 要复制的第 i 个纹理子资源
+			SrcLocation.SubresourceIndex = i;
+			// 被复制的资源 (默认堆资源)
+			SrcLocation.pResource = m_UAVHeightTextureArray_DefaultResource.Get();
+
+			// 记录复制第 i 个子资源 (纹理数组元素) 到回读堆的命令 (显存 -> 共享内存) 
+			m_CommandList->CopyTextureRegion(&DstLocation, 0, 0, 0, &SrcLocation, nullptr);
+		}
+
+		// 复制完成后，将 UAV 纹理数组转换回无序访问状态，准备下一次地形加载
+		m_CommandList->ResourceBarrier(1, &CopySourceToUAV_barrier);
+
+
+		// 关闭命令列表
+		m_CommandList->Close();
+
+		// 用于传递命令用的临时 ID3D12CommandList 数组
+		ID3D12CommandList* _temp_cmdlists[] = { m_CommandList.Get() };
+
+		// 提交命令队列，执行上文的复制命令！
+		m_CommandQueue->ExecuteCommandLists(1, _temp_cmdlists);
+
+
+		// 将围栏预定值设定为下一帧
+		FenceValue++;
+		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
+		m_CommandQueue->Signal(m_RenderFence.Get(), FenceValue);
+		// 设置围栏的预定事件，当计算完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
+		m_RenderFence->SetEventOnCompletion(FenceValue, RenderEvent);
+
+
+		// 强制让 CPU 主线程等待 GPU 执行完成，正在被 GPU 复制的资源，CPU 不可以进行 Map-Unmap 操作
+		// 必须等待复制完成才可以进行读取，否则会发生资源冲突
+		// 这种写法弊处多多，后面我们学到 多线程渲染、多命令列表、多命令队列、多围栏同步 会进行一次大改
+		WaitForSingleObject(RenderEvent, INFINITE);
+	}
+
+
+
+	// 将回读堆的数据转换成新区块实例数据，并加入到缓冲的渲染分支
+	void RenderBranch_AppendNewChunkInstance()
+	{
+		// 指定回读范围的 Range，用于消除 D3D12 Warning
+		D3D12_RANGE HeightMapsRange = { 0, UAVReadbackResourceSize };
+		// 用于传递高度数据的指针，注意类型是 float (四字节)
+		float* HeightMapPointer = nullptr;
+		// 获取回读堆资源地址
+		m_UAVHeightTextureArray_ReadbackResource->Map(0, &HeightMapsRange,
+			reinterpret_cast<void**>(&HeightMapPointer));
+
+
+		// UAV 纹理数组子资源每行的对齐大小 (单位：float)
+		UINT UAVMapRowPerFloat = UAVMapBytePerRowSize / sizeof(float);
+		// UAV 纹理数组每个子资源的对齐大小 (单位：float)
+		UINT UAVMapElementPerFloat = UAVMapsElementSize / sizeof(float);
+
+
+		// 先保存实例资源原先的起始地址，等会需要进行指针偏移，注意类型是 BLOCK_INSTANCE
+		// 类型后 const 表示指针指向的内存可修改，但指针本身的地址值不可更改
+		BLOCK_INSTANCE* const OriginAddress = BlockInstanceMapPointer;
+
+
+		// 逐一对新区块生成高度图，并放到指定的实例缓冲，变更区块 Hive Buffer 的状态
+		for (UINT MapIndex = 0; MapIndex < ReadyCreateChunkBuffer.size(); MapIndex++)
+		{
+			// 新区块方块实例的数量
+			UINT NewChunkInstanceCount = 0;
+
+			// 偏移到方块实例缓冲下，新区块的地址
+			BlockInstanceMapPointer = OriginAddress + ReadyCreateChunkBuffer[MapIndex].InstanceOffset;
+
+			// 区块相对世界中心的 xz 轴偏移
+			int WorldOffsetX = ReadyCreateChunkBuffer[MapIndex].ChunkXZ.x;
+			int WorldOffsetZ = ReadyCreateChunkBuffer[MapIndex].ChunkXZ.y;
+
+
+			// 遍历 UAV 纹理高度图，逐一生成地形网格方块柱，并记录实例数量
+			for (int GridZ = 0; GridZ < TerrianGridHeight; GridZ++)
+			{
+				for (int GridX = 0; GridX < TerrianGridWidth; GridX++)
+				{
+					// 获取当前网格的最大高度的原始数据 (RWTexture2D<float>)
+					const float RawHeight = *HeightMapPointer;
+
+					// 对原始数据四舍五入，就能得到我们可以用的最大高度
+					const int CurrentGridMaxHeight = round(RawHeight);
+
+
+					// 从 0 开始，对该网格生成方块柱
+					for (int GridY = 0; GridY <= CurrentGridMaxHeight; GridY++)
+					{
+						BLOCK_INSTANCE NewBlock = {};					// 新方块
+						NewBlock.BlockOffset.x = WorldOffsetX + GridX;	// 当前网格 x 轴坐标
+						NewBlock.BlockOffset.y = GridY;					// 当前网格 y 轴坐标
+						NewBlock.BlockOffset.z = WorldOffsetZ + GridZ;	// 当前网格 z 轴坐标
+
+
+						// 最底层方块是基岩
+						if (GridY == 0)
+						{
+							NewBlock.BlockType = 3;
+						}
+						// 包括 y = 4 以下都是石头，暂时先这样定义
+						else if (GridY <= 4)
+						{
+							NewBlock.BlockType = 2;
+						}
+						// 剩下的是泥土
+						else
+						{
+							NewBlock.BlockType = 0;
+						}
+
+
+						// 方块实例缓冲添加新实例
+						*BlockInstanceMapPointer = NewBlock;
+
+						// 指向缓冲的指针指向下一个空位
+						BlockInstanceMapPointer++;
+
+						// 新区块实例数量 +1
+						NewChunkInstanceCount++;
+					}
+
+
+					// 如果最高的方块的类型是泥土，就变成草方块
+					if ((BlockInstanceMapPointer - 1)->BlockType == 0)
+					{
+						(BlockInstanceMapPointer - 1)->BlockType = 1;
+					}
+
+
+					// x 轴偏移到下一个纹理元素
+					HeightMapPointer++;
+				}
+
+
+				// z 轴偏移到下一行第一个纹理元素
+				HeightMapPointer += UAVMapRowPerFloat - TerrianGridWidth;
+			}
+
+
+			// 通过哈希表找到当前区块在 HiveBuffer 的真实位置，并修改相关属性
+			const UINT64 ChunkIndex = ChunkSearchMap[ChunkInMapKey(WorldOffsetX, WorldOffsetZ)];
+			// 加载完成，将该区块设置为 KEEP 保持状态
+			ChunkMetaDataHiveBuffer[ChunkIndex].State = KEEP;
+			// 赋值上面两个嵌套循环计算得到的总区块数量
+			ChunkMetaDataHiveBuffer[ChunkIndex].InstanceCount = NewChunkInstanceCount;
+
+
+			// 整个指针偏移到下一个纹理图起始位置
+			HeightMapPointer += UAVMapElementPerFloat - UAVMapRowPerFloat * TerrianGridHeight;
+		}
+
+
+		// 清空待加载区块
+		ReadyCreateChunkBuffer.clear();
+
+		// 注意这里，指向方块实例缓冲的指针还原起始位置！
+		BlockInstanceMapPointer = OriginAddress;
+
+		// 结束映射，和上传堆 Write-Combine 写入结合属性不同，回读堆是 Cachable 可缓存的内存属性
+		// 它的设计目标是让 GPU 写入的数据能被 CPU 高效地读取，必须要 Map-Unmap，否则报 D3D12 Error
+		// 在回读堆上调用 Unmap 是一个关键信号，它会通知驱动程序：CPU 即将读取这块内存
+		// 驱动程序 (硬件) 会确保任何可能包含这片区域旧数据的 CPU 缓存行被标记为无效
+		// 这样，当你后续再次 Map 并读取时，CPU 会强制从真正的物理内存中加载数据，从而读取到 GPU 写入的最新值
+		// Unmap 用于刷新 CPU 缓存，保证读取到最新数据，在回读堆中起到了隐式的同步作用
+		m_UAVHeightTextureArray_ReadbackResource->Unmap(0, nullptr);
+	}
+
+
+
+	// 向 GPU 提交绘制区块命令的渲染分支
+	void RenderBranch_RenderChunk()
+	{
 		// 获取 RTV 堆首句柄
 		RTVHandle = m_RTVHeap->GetCPUDescriptorHandleForHeapStart();
 		// 获取当前渲染的后台缓冲序号
@@ -2368,70 +2646,88 @@ public:
 		// 再重置命令列表，Close 关闭状态 -> Record 录制状态
 		m_CommandList->Reset(m_CommandAllocator.Get(), nullptr);
 
-		// 将起始转换屏障的资源指定为当前渲染目标
-		beg_barrier.Transition.pResource = m_D3D12RenderTarget[FrameIndex].Get();
-		// 调用资源屏障，将渲染目标由 Present 呈现(只读) 转换到 RenderTarget 渲染目标(只写)
-		m_CommandList->ResourceBarrier(1, &beg_barrier);
-
-		// 设置视口 (光栅化阶段)，用于光栅化里的屏幕映射
-		m_CommandList->RSSetViewports(1, &ViewPort);
-		// 设置裁剪矩形 (光栅化阶段)
-		m_CommandList->RSSetScissorRects(1, &ScissorRect);
 
 
-
-		// 用 RTV 句柄设置渲染目标，同时用 DSV 句柄设置深度模板缓冲，开启深度测试
-		m_CommandList->OMSetRenderTargets(1, &RTVHandle, false, &DSVHandle);
-
-		// 清空后台的深度模板缓冲，将深度重置为初始值 1
-		m_CommandList->ClearDepthStencilView(DSVHandle, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
-
-		// 清空当前渲染目标的背景为天蓝色
-		m_CommandList->ClearRenderTargetView(RTVHandle, DirectX::Colors::SkyBlue, 0, nullptr);
+		// 再进行渲染
+		{
+			// 将起始转换屏障的资源指定为当前渲染目标
+			beg_barrier.Transition.pResource = m_D3D12RenderTarget[FrameIndex].Get();
+			// 调用资源屏障，将渲染目标由 Present 呈现(只读) 转换到 RenderTarget 渲染目标(只写)
+			m_CommandList->ResourceBarrier(1, &beg_barrier);
 
 
+			// 设置视口 (光栅化阶段)，用于光栅化里的屏幕映射
+			m_CommandList->RSSetViewports(1, &ViewPort);
+			// 设置裁剪矩形 (光栅化阶段)
+			m_CommandList->RSSetScissorRects(1, &ScissorRect);
 
-		// 第二次设置根签名，本次检测 PSO 根签名的合法性 (引用资源是否匹配)，检测成功会开启显存与寄存器的映射通道
-		m_CommandList->SetGraphicsRootSignature(m_RenderRootSignature.Get());
 
-		// 设置 PSO 渲染管线状态
-		m_CommandList->SetPipelineState(m_RenderBlockPSO.Get());
+			// 用 RTV 句柄设置渲染目标，同时用 DSV 句柄设置深度模板缓冲，开启深度测试
+			m_CommandList->OMSetRenderTargets(1, &RTVHandle, false, &DSVHandle);
 
-		// 设置第一个根参数：CBV 描述符 (MVP 缓冲)
-		m_CommandList->SetGraphicsRootConstantBufferView(0, m_CBVResource->GetGPUVirtualAddress());
+			// 清空后台的深度模板缓冲，将深度重置为初始值 1
+			m_CommandList->ClearDepthStencilView(DSVHandle, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
 
-		// 设置第二个根参数：SRV 根描述符 (结构化缓冲)，注意这里设置的是默认堆资源的 GPU 地址！
-		m_CommandList->SetGraphicsRootShaderResourceView(1, m_StructuredBuffer_DefaultResource->GetGPUVirtualAddress());
-
-		// 用于设置描述符堆用的临时 ID3D12DescriptorHeap 数组
-		ID3D12DescriptorHeap* _temp_DescriptorHeaps[] = { m_SRVUAVHeap.Get() };
-		// 设置描述符堆
-		m_CommandList->SetDescriptorHeaps(1, _temp_DescriptorHeaps);
-
-		// 设置 SRV 句柄 (第三个根参数)，我们设置了一个纹理数组，切换纹理索引都在 shader 中进行
-		// 相比每纹理单独绑定，用纹理数组的好处是没有切换开销，GPU 缓冲命中率很高，减少描述符堆压力，可以用于硬件实例化！
-		m_CommandList->SetGraphicsRootDescriptorTable(2, SRVTextureArray_GPUHandle);
+			// 清空当前渲染目标的背景为天蓝色
+			m_CommandList->ClearRenderTargetView(RTVHandle, DirectX::Colors::SkyBlue, 0, nullptr);
 
 
 
-		// 设置图元拓扑 (输入装配阶段)，我们这里设置三角形列表
-		m_CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			// 用于设置描述符堆用的临时 ID3D12DescriptorHeap 数组
+			ID3D12DescriptorHeap* _temp_DescriptorHeaps[] = { m_SRVUAVHeap.Get() };
+			// 设置描述符堆，描述符堆表示了根描述表第二次寻址，寻找描述符需要的基地址
+			m_CommandList->SetDescriptorHeaps(1, _temp_DescriptorHeaps);
 
-		// 设置 VBV 顶点缓冲描述符数组，两个 VBV 都会被设置 (输入装配阶段) 
-		m_CommandList->IASetVertexBuffers(0, 2, VertexBufferView);
+			// 设置 RenderRootSignature
+			m_CommandList->SetGraphicsRootSignature(m_RenderRootSignature.Get());
 
-		// 设置 IBV 索引缓冲描述符 (输入装配阶段) 
-		m_CommandList->IASetIndexBuffer(&IndexBufferView);
+			// 设置 RenderBlockPSO
+			m_CommandList->SetPipelineState(m_RenderPSO.Get());
 
-		// Draw Call 渲染所有目标实例！
-		m_CommandList->DrawIndexedInstanced(PreBlockIndexData.size(), BlockGroup.size(), 0, 0, 0);
+			// 设置第一个根参数：CBV 根描述符 (MVP 缓冲)
+			m_CommandList->SetGraphicsRootConstantBufferView(0,
+				m_CBVRenderBlock_UploadResource->GetGPUVirtualAddress());
+
+			// 设置第二个根参数：SRV 根描述符 (方块类型-纹理索引组)
+			m_CommandList->SetGraphicsRootShaderResourceView(1,
+				m_SRVStructuredBuffer_DefaultResource->GetGPUVirtualAddress());
+
+			// 设置第三个根参数：根描述表 (SRV 方块纹理数组)
+			m_CommandList->SetGraphicsRootDescriptorTable(2, SRVTextureArray_GPUHandle);
 
 
 
-		// 将终止转换屏障的资源指定为当前渲染目标
-		end_barrier.Transition.pResource = m_D3D12RenderTarget[FrameIndex].Get();
-		// 再通过一次资源屏障，将渲染目标由 RenderTarget 渲染目标(只写) 转换到 Present 呈现(只读)
-		m_CommandList->ResourceBarrier(1, &end_barrier);
+			// 设置图元拓扑：三角形列表
+			m_CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+			// 设置 VBV 顶点缓冲描述符数组，两个 VBV 都会被设置
+			m_CommandList->IASetVertexBuffers(0, 2, VertexBufferView);
+
+			// 设置 IBV 索引缓冲描述符
+			m_CommandList->IASetIndexBuffer(&IndexBufferView);
+
+
+			
+			// 遍历已加载区块哈希表，对已加载区块进行多实例渲染
+			// 如果区块实例数量不为 0，就渲染
+			for (const auto& [key, index] : ChunkSearchMap)
+			{
+				if (ChunkMetaDataHiveBuffer[index].InstanceCount != 0)
+				{
+					m_CommandList->DrawIndexedInstanced(36, ChunkMetaDataHiveBuffer[index].InstanceCount,
+						0, 0, ChunkMetaDataHiveBuffer[index].InstanceOffset);
+				}
+			}
+			
+			
+
+			// 将终止转换屏障的资源指定为当前渲染目标
+			end_barrier.Transition.pResource = m_D3D12RenderTarget[FrameIndex].Get();
+			// 再通过一次资源屏障，将渲染目标由 RenderTarget 渲染目标(只写) 转换到 Present 呈现(只读)
+			m_CommandList->ResourceBarrier(1, &end_barrier);
+		}
+
+
 
 		// 关闭命令列表，Record 录制状态 -> Close 关闭状态，命令列表只有关闭才可以提交
 		m_CommandList->Close();
@@ -2451,15 +2747,38 @@ public:
 		FenceValue++;
 		// 在命令队列 (命令队列在 GPU 端) 设置围栏预定值，此命令会加入到命令队列中
 		// 命令队列执行到这里会修改围栏值，表示渲染已完成，"击中"围栏
-		m_CommandQueue->Signal(m_Fence.Get(), FenceValue);
+		m_CommandQueue->Signal(m_RenderFence.Get(), FenceValue);
 		// 设置围栏的预定事件，当渲染完成时，围栏被"击中"，激发预定事件，将事件由无信号状态转换成有信号状态
-		m_Fence->SetEventOnCompletion(FenceValue, RenderEvent);
+		m_RenderFence->SetEventOnCompletion(FenceValue, RenderEvent);
+	}
+
+
+
+	// 渲染
+	void Render()
+	{
+		// 更新每帧都需要的数据
+		UpdateFrameData();
+
+
+		// 如果有待加载的新区块，就开启并调度 NoiseShader 计算高度图，之后回读高度纹理数组创建区块实例
+		if (ReadyCreateChunkBuffer.size() != 0)
+		{
+			// 先调度 GPU 生成高度图
+			RenderBranch_GenerateNewChunkHeightMap();
+			// 回读高度图，生成新区块实例
+			RenderBranch_AppendNewChunkInstance();
+		}
+
+
+		// 每帧都进行区块渲染
+		RenderBranch_RenderChunk();
 	}
 
 
 
 	// 渲染循环
-	void STEP31_RenderLoop()
+	void STEP30_RenderLoop()
 	{
 		bool isExit = false;	// 是否退出
 		MSG msg = {};			// 消息结构体
@@ -2581,6 +2900,19 @@ public:
 					}
 					break;
 				}
+
+				// 获取玩家坐标，并更新窗口标题栏
+				{
+					auto pos = m_FirstCamera.GetEyePosition();
+					int x = XMVectorGetX(pos);
+					int y = XMVectorGetY(pos);
+					int z = XMVectorGetZ(pos);
+
+					std::wstring wstr = L"Minecraft: 玩家当前坐标 (" + std::to_wstring(x) + L"," +
+						std::to_wstring(y) + L"," + std::to_wstring(z) + L")";
+
+					SetWindowText(hwnd, wstr.c_str());
+				}
 			}
 			break;
 
@@ -2625,8 +2957,6 @@ public:
 			// 如果接收到其他消息，直接默认返回整个窗口
 			default: return DefWindowProc(hwnd, msg, wParam, lParam);
 		}
-
-		return 0;
 	}
 
 
@@ -2649,40 +2979,44 @@ public:
 		engine.STEP08_CreateDSVHeap();
 		engine.STEP09_CreateDepthStencilBuffer();
 		engine.STEP10_CreateDSV();
-		engine.STEP11_CreateCBVResource();
 
 
-		engine.STEP12_LoadImageAndTransform();
-		engine.STEP13_GetTextureArrayElementsProperties();
-		engine.STEP14_CreateTextureArrayResource();
-		engine.STEP15_CopyTextureArrayToDefaultResource();
-		engine.STEP16_CreateSRVUAVHeap();
-		engine.STEP17_CreateTextureArraySRV();
+		engine.STEP11_LoadImageAndTransform();
 
 
-		engine.STEP18_CreateStructuredBufferResource();
-		engine.STEP19_CopyStructuredBufferToDefaultResource();
+		engine.STEP12_GetTextureArrayElementsProperties();
+		engine.STEP13_CreateTextureArrayResource();
+		engine.STEP14_CopyTextureArrayToDefaultResource();
+		engine.STEP15_CreateSRVUAVHeap();
+		engine.STEP16_CreateTextureArraySRV();
 
 
-		engine.STEP20_CreateUAVTerrianHeightMapResource();
-		engine.STEP21_CreateHeightMapUAV();
-		engine.STEP22_CreateComputeRootSignature();
-		engine.STEP23_CreateComputePSO();
-		engine.STEP24_GenerateHeightMap();
+		engine.STEP17_CreateStructuredBufferResource();
+		engine.STEP18_CopyStructuredBufferToDefaultResource();
 
 
-		engine.STEP25_CreateReadbackResource();
-		engine.STEP26_CopyHeightMapToReadbackResource();
+		engine.STEP19_CreateNoiseRequireResource();
+		engine.STEP20_CreateHeightTextureArrayUAV();
 
 
-		engine.STEP27_CreateRenderRootSignature();
-		engine.STEP28_CreateRenderBlockPSO();
-
-		engine.STEP29_CreatePerVertexAndIndexBuffer();
-		engine.STEP30_CreatePerInstanceBuffer();
+		engine.STEP21_CreateNoiseRootSignature();
+		engine.STEP22_CreateNoisePSO();
+		engine.STEP23_CreateHeightMapBarrier();
 
 
-		engine.STEP31_RenderLoop();
+		engine.STEP24_CreateRenderRootSignature();
+		engine.STEP25_CreateRenderBlockPSO();
+		engine.STEP26_CreateRenderCBVResource();
+
+
+		engine.STEP27_CreatePerVertexAndIndexBuffer();
+		engine.STEP28_CreatePerInstanceBuffer();
+
+
+		engine.STEP29_InitChunkContainer();
+
+
+		engine.STEP30_RenderLoop();
 	}
 };
 

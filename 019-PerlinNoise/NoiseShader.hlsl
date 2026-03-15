@@ -1,6 +1,6 @@
 
 // (19) PerlinNoise: 初步学习计算着色器、UAV Resource 无序访问资源、Readback Heap 回读堆，理解并运用柏林噪声生成简单的地形网格
-// NoiseShader.hlsl: 用柏林噪声生成高度图的 shader
+// NoiseShader.hlsl: 用柏林噪声生成 UAV 高度图的 shader
 
 
 // 用于计算着色器的常量缓冲
@@ -211,7 +211,7 @@ void CSMain(uint3 CurrentGPUThreadID : SV_DispatchThreadID)
 	// 0.02 ~ 0.05：		适中的起伏，出现明显的丘陵和小山包 (普通的野外环境、乡村地形)
 	// 0.1 ~ 0.2：		地形崎岖，山峰和山谷密集，变化剧烈 (山地、高原、峡谷)
 	// 0.3 ~ 0.5：		噪声频率过高，地形破碎，出现大量细小尖峰 (特殊地貌，例如岩石纹理、珊瑚礁)
-	const float TerrainFrequency = 0.03;
+	const float TerrainFrequency = 0.02;
 	
 	
 	// 1.将当前线程 ID 映射到地形坐标，与 TerrainFrequency 相乘可以控制地形
@@ -222,19 +222,14 @@ void CSMain(uint3 CurrentGPUThreadID : SV_DispatchThreadID)
 	float RawNoiseHeight = PerlinNoise(WorldPosition);
 	
 	
-	// 3.归一化高度，将原始噪声高度进行一次映射处理，从 [-0.7, 0.7] 映射到 [0, 1]
-	// 为什么是 raw * 0.5 + 0.5? 精确映射实际上大概是 raw / 1.4 + 0.5 这个式子
-	// 但许多实现 (尤其是改进版，包括我们这个) 会使实际输出更接近 [-1, 1]，且视觉上差异极小
-	// 我们要把高度先进行一次归一化，这样后续好做实际高度范围的映射
-	float NormalizedHeight = RawNoiseHeight * 0.5 + 0.5;
+	// 3.将原始噪声值转换成地形高度
+	// 乘 16 表示放大噪声振幅，地形起伏更大，更明显
+	// 加 8 表示把整体高度基线抬到 8 以上，地形平均高度为 8
+	// clamp 表示截断地形高度，限制地形高度在 [0, 24] 之间，不让越界
+	float Height = clamp(8 + RawNoiseHeight * 16, 0, 24);
 	
 	
-	// 4.将高度放大到我们想要的实际范围，我们的范围是 [0, 24] 这一波动区间
-	// 公式其实就是线性插值公式: Height * (max - min) + min，这里我们直接用内置函数 lerp 就直观方便多了
-	float Height = lerp(0, 24, NormalizedHeight);
-	
-	
-	// 5.每个线程都对应高度图的一个像素，将计算得到的高度，写入对应坐标的纹理像素上
+	// 4.每个线程都对应高度图的一个像素，将计算得到的高度，写入对应坐标的纹理像素上
 	m_HeightMap[CurrentGPUThreadID.xy] = Height;
 }
 

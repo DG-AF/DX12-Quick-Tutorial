@@ -234,12 +234,20 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 
 ### (19) PerlinNoise
 
-![19.gif](https://a2.boltp.com/2026/03/09/69aee0dac6730.gif)
+![19.gif](https://a2.boltp.com/2026/03/20/69bd6af6a138e.gif)
 
 初步学习计算着色器、UAV Resource 无序访问资源、Readback Heap 回读堆，理解并运用柏林噪声生成简单的地形网格 (柏林噪声就长这样的，想要获得原版那样的游戏效果，需要叠加其他噪声)
 
 [教程地址：DX12 快速教程(19) —— 柏林噪声](https://blog.csdn.net/DGAF2198588973/article/details/158853809)
 
+
+### (20) InfiniteWorld
+
+![20.gif](https://a2.boltp.com/2026/03/20/69bd6af6ba437.gif)
+
+进一步学习计算着色器，掌握动态资源的管理，学习 HiveBuffer 非连续缓冲与空闲栈的思想，认识 UAV 纹理数组与结构化缓冲区，动态生成区块高度图，模拟 MC 无限世界的生成
+
+[教程地址：DX12 快速教程(20) —— 无限世界生成](https://blog.csdn.net/DGAF2198588973/article/details/159292295)
 
 
 

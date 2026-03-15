@@ -4,9 +4,7 @@
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="ParticleShader.hlsl" />
-    <FxCompile Include="DestroyStageShader.hlsl" />
-    <FxCompile Include="RenderBlockShader.hlsl" />
-    <FxCompile Include="RenderParticleShader.hlsl" />
+    <FxCompile Include="RenderShader.hlsl" />
+    <FxCompile Include="NoiseShader.hlsl" />
   </ItemGroup>
 </Project>

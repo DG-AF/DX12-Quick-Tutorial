@@ -24,7 +24,6 @@
 #include<fstream>				// C++ 文件流处理库
 #include<vector>				// C++ STL vector 容器库
 #include<codecvt>				// C++ 字符编码转换库，用于 string 转 wstring
-#include<iomanip>				// C++ 输入输出控制格式化库，用于 CallBackFunc 的 std::fixed 与 std::setprecision
 
 
 #pragma comment(lib,"d3d12.lib")			// 链接 DX12 核心 DLL
@@ -2184,7 +2183,7 @@ public:
 
 		// 我们要在算出 UploadSubResourceSize 的基础上，再进行一次 512 对齐，算出纹理数组每个元素在上传堆所占的真实大小
 		// 硬件正确偏移到每个元素的起始点。仍然是最后一个元素无需对齐，直接复制
-		// D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT = 512
+		// D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT = 512
 		UploadArrayElementSize = Ceil(UploadSubResourceSize, 512) * 512;
 
 		// 最后计算上传堆资源所需要的总大小，公式和上面的 UploadSubResourceSize 计算是一样的

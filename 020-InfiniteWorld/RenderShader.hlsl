@@ -1,17 +1,13 @@
 
-// (20) ParticleSystem: 进一步学习计算着色器，学习粒子的动态生成与销毁，模拟 Minecraft 的粒子破坏效果
-// RenderBlockShader.hlsl: 渲染方块的 shader
+// (20) InfiniteWorld: 进一步学习计算着色器，掌握动态资源的管理，认识 UAV 纹理数组与结构化缓冲区，模拟 MC 无限世界的生成
+// RenderShader.hlsl: 渲染方块的 shader
 
 
-// 用于 MVP 矩阵、方块破坏阶段、方块朝向的常量缓冲
+// 用于 MVP 矩阵的常量缓冲
 cbuffer GlobalData : register(b0, space0)
 {
 	// 摄像机提供 MVP 矩阵，将顶点从世界空间变换到齐次裁剪空间
 	row_major float4x4 MVPMatrix;
-	// 方块朝向 (0-5 分别对应 右左前后上下，6-8 用于正面朝上的特殊方块)，存储的旋转到对应朝向的旋转矩阵
-	row_major float4x4 BlockFaceForwardMatrix[9];
-	// 方块破坏阶段使用纹理的索引，在 DestroyStageShader.hlsl 会用到，这个 shader 不需要管
-	uint DestroyStage;
 }
 
 
@@ -38,7 +34,6 @@ struct IA_To_VS
 	// 输入槽 1 (实例流)
 	float3 BlockOffset : BLOCKOFFSET;	// 每个方块实例距离世界中心 (0, 0, 0) 的位移
 	uint BlockType : BLOCKTYPE;			// 方块实例类型
-	uint RotateIndex : ROTATEINDEX;		// 每个方块面朝向索引 (在 BlockFaceForwardMatrix 的索引)
 };
 
 
@@ -60,9 +55,6 @@ VS_To_PS VSMain(IA_To_VS VSInput)
 	// VS 输出到 PS 的结构体
 	VS_To_PS VSOutput;
 	
-	// 先进行旋转，旋转到对应朝向 (注意，我们在 CPU 端已经把方块中心设置在模型空间中心 (0, 0, 0) 了)
-	// (实例混合，将副本的 Position 数据与实例部分数据 RotateIndex 混合)
-	VSInput.Position = mul(BlockFaceForwardMatrix[VSInput.RotateIndex], VSInput.Position);
 	// 顶点累加偏移，这样就得到了实例顶点相对世界空间的坐标，注意 w 分量不累加
 	// (实例混合，将副本的 Position 数据与实例部分数据 BlockOffset 混合)
 	VSInput.Position.xyz += VSInput.BlockOffset;
