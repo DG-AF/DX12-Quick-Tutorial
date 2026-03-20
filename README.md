@@ -26,6 +26,8 @@
   - [(17) DrawItemsAndMerge](#17-DrawItemsAndMerge)
   - [(18) ScreenSpaceRaycast](#18-ScreenSpaceRaycast)
   - [(19) PerlinNoise](#19-PerlinNoise)
+  - [(20) InfiniteWorld](#20-InfiniteWorld)
+  - [(21) GPUFrustumCulling](#21-GPUFrustumCulling)
 
 ## 读者应该 clone 哪一个分支
 
@@ -37,10 +39,10 @@
 (备用 QQ：1281866925，备用邮箱：3976357120@qq.com)
 
 
-## 2026.3.9 更新
+## 2026.3.22 更新
 
-1. 更新第 19 章代码：**019-PerlinNoise (DX12 快速教程(19) —— 柏林噪声)**<br/>
-2. 修正部分代码与文字描述
+1. 更新第 20 与 21 章代码：**020-InfiniteWorld**、**021-GPUFrustumCulling**<br/>
+2. 修正部分 bug 与文字描述
 
 ## 前言
 
@@ -248,6 +250,17 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 进一步学习计算着色器，掌握动态资源的管理，学习 HiveBuffer 非连续缓冲与空闲栈的思想，认识 UAV 纹理数组与结构化缓冲区，动态生成区块高度图，模拟 MC 无限世界的生成
 
 [教程地址：DX12 快速教程(20) —— 无限世界生成](https://blog.csdn.net/DGAF2198588973/article/details/159292295)
+
+
+### (21) GPUFrustumCulling
+
+![21.gif](https://a2.boltp.com/2026/03/22/69bfd056f19b4.gif)
+
+认识视锥剔除，认识命令签名，UAV 原始缓冲区，ExecuteIndirect，学会 GPU 视锥剔除，熟练计算着色器的基本使用方法，进一步理解 Transition 转换屏障的使用，从上一章的 4x4 的区块可见范围，扩大到更大的 8x8 范围，并进一步减少渲染开销
+
+[教程地址：DX12 快速教程(21) —— GPU 视锥剔除](https://blog.csdn.net/DGAF2198588973/article/details/159354380)
+
+
 
 
 

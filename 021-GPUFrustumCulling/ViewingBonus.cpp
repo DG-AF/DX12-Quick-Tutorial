@@ -1,5 +1,8 @@
 
 // (21) GPUFrustumCulling: 认识视锥剔除，认识命令签名，UAV 原始缓冲区，学会 GPU 视锥剔除，更好地渲染地图扩大的无限世界
+// ViewingBonus.cpp: 这个是用来查看 GPU 视锥剔除后保留多少区块的，相比 main.cpp 只多了一个 Counter 回读堆资源
+//					 写好 main.cpp 之后我拿给 DeepSeek 叫它改成 ViewingBonus.cpp 了，它们两个是相互独立的
+//					 禁用 main.cpp 的生成，解除 ViewingBonus 的生成选项，看看有什么效果？
 
 
 // windows.h 与标准库里的 min/max 函数重名导致冲突了，禁用 windows.h 里面的 min/max 函数
@@ -597,7 +600,7 @@ public:
 			{
 				// 将平面方程 (法线) 进行反转，让平面朝向视锥体内部
 				Plane = XMVectorNegate(Plane);
-			}	
+			}
 		}
 
 		return FrustumPlanes;
@@ -1084,9 +1087,25 @@ private:
 	// 将 CommandBuffer 和 Counter 从 INDIRECT -> UNORDERED_ACCESS 的两个资源屏障
 	D3D12_RESOURCE_BARRIER IndirectToUAV_barrier[2] = {};
 
+	// ----- 新增：用于回读命令计数器的资源 -----
+	ComPtr<ID3D12Resource> m_CounterReadbackResource;			// 计数器回读堆
+	UINT m_LastVisibleChunkCount = 0;							// 上一帧的可见区块数量
 
+	// ----- 辅助函数：更新窗口标题 -----
+	void UpdateWindowTitle()
+	{
+		auto pos = m_FirstCamera.GetEyePosition();
+		int x = XMVectorGetX(pos);
+		int y = XMVectorGetY(pos);
+		int z = XMVectorGetZ(pos);
 
-	// ---------------------------------------------------------------------------------------------------------------
+		std::wstring wstr = L"Minecraft: 玩家坐标 (" + std::to_wstring(x) + L"," +
+			std::to_wstring(y) + L"," + std::to_wstring(z) + L") | 可见区块: " +
+			std::to_wstring(m_LastVisibleChunkCount);
+
+		SetWindowText(m_hwnd, wstr.c_str());
+	}
+	// --------------------------------
 
 public:
 
@@ -2514,6 +2533,24 @@ public:
 			m_CBVCullingGlobalBuffer_UploadResource->Map(0, nullptr,
 				reinterpret_cast<void**>(&CullingCbufferPointer));
 		}
+
+		// ----- 新增：创建用于回读计数器的回读堆 -----
+		{
+			D3D12_RESOURCE_DESC readbackDesc = {};
+			readbackDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			readbackDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			readbackDesc.Width = 4;						// 只存储一个 UINT
+			readbackDesc.Height = 1;
+			readbackDesc.Format = DXGI_FORMAT_UNKNOWN;
+			readbackDesc.DepthOrArraySize = 1;
+			readbackDesc.MipLevels = 1;
+			readbackDesc.SampleDesc.Count = 1;
+
+			m_D3D12Device->CreateCommittedResource(&ReadbackHeapDesc, D3D12_HEAP_FLAG_NONE,
+				&readbackDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+				IID_PPV_ARGS(&m_CounterReadbackResource));
+		}
+		// --------------------------------
 	}
 
 
@@ -3111,6 +3148,28 @@ public:
 			m_CommandList->Dispatch(ThreadGroupsNum, 1, 1);
 
 
+			// ----- 新增：将计数器值复制到回读堆 -----
+			{
+				// 将计数器从 UAV 状态转换为 COPY_SOURCE 状态
+				D3D12_RESOURCE_BARRIER barrier = {};
+				barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+				barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+				barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+				barrier.Transition.pResource = m_UAVIndirectCommandCounter_DefaultResource.Get();
+				barrier.Transition.Subresource = 0;
+				m_CommandList->ResourceBarrier(1, &barrier);
+
+				// 复制计数器（4字节）到回读堆
+				m_CommandList->CopyBufferRegion(m_CounterReadbackResource.Get(), 0,
+					m_UAVIndirectCommandCounter_DefaultResource.Get(), 0, 4);
+
+				// 转换回 UAV 状态，以便后续清空计数器
+				barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+				barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+				m_CommandList->ResourceBarrier(1, &barrier);
+			}
+			// --------------------------------
+
 			// 计算完成后，将 CommandBuffer 和 Counter 都转换到 Indirect 间接命令状态
 			// 等会要进行 ExecuteIndirect 发起间接命令请求，让 GPU 驱动渲染
 			m_CommandList->ResourceBarrier(2, UAVToIndirect_barrier);
@@ -3290,6 +3349,19 @@ public:
 			{
 				case 0:				// ActiveEvent 是 0，说明渲染事件已经完成了，进行下一次渲染
 				{
+					// ----- 新增：读取计数器回读堆的值 -----
+					{
+						D3D12_RANGE range = { 0, 4 };
+						void* pData = nullptr;
+						if (SUCCEEDED(m_CounterReadbackResource->Map(0, &range, &pData)))
+						{
+							m_LastVisibleChunkCount = *reinterpret_cast<UINT*>(pData);
+							m_CounterReadbackResource->Unmap(0, nullptr);
+						}
+						// 更新窗口标题，显示可见区块数
+						UpdateWindowTitle();
+					}
+					// --------------------------------
 					Render();
 				}
 				break;
@@ -3398,18 +3470,8 @@ public:
 					break;
 				}
 
-				// 获取玩家坐标，并更新窗口标题栏
-				{
-					auto pos = m_FirstCamera.GetEyePosition();
-					int x = XMVectorGetX(pos);
-					int y = XMVectorGetY(pos);
-					int z = XMVectorGetZ(pos);
-
-					std::wstring wstr = L"Minecraft: 玩家当前坐标 (" + std::to_wstring(x) + L"," +
-						std::to_wstring(y) + L"," + std::to_wstring(z) + L")";
-
-					SetWindowText(hwnd, wstr.c_str());
-				}
+				// 更新窗口标题栏（坐标 + 可见区块数）
+				UpdateWindowTitle();
 			}
 			break;
 
@@ -3515,7 +3577,7 @@ public:
 
 		engine.STEP30_CreateCommandSignature();
 		engine.STEP31_CreateCullingRequireResource();
-		
+
 
 		engine.STEP32_CreateCullingRootSignature();
 		engine.STEP33_CreateCullingPSO();
@@ -3533,7 +3595,3 @@ int WINAPI WinMain(HINSTANCE hins, HINSTANCE hPrev, LPSTR cmdLine, int cmdShow)
 {
 	DX12Engine::Run(hins);
 }
-
-
-
-

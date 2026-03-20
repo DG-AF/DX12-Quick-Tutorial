@@ -707,9 +707,9 @@ private:
 	// 16x16 区块边长
 	const int ChunkSideLength = 16;
 	// 区块的最大高度，由于性能原因我们暂时设置成 24，后面我们会逐步扩充到 1.16 之前的 256 高度
-	const int MaxHeightHeight = 24;
+	const int MaxChunkHeight = 24;
 	// 一个区块在实例缓冲的最大实例数量，每个区块至少要占 16x16x24 的空间
-	const UINT MaxChunkInstanceCount = ChunkSideLength * ChunkSideLength * MaxHeightHeight;
+	const UINT MaxChunkInstanceCount = ChunkSideLength * ChunkSideLength * MaxChunkHeight;
 	// UAV 纹理数组和 SRV 待加载列表一次创建的最大区块数量 (9x9=81，最大加载范围)
 	const UINT MaxCreateChunkCount = (MaxCreateRadius * 2 - 1) * (MaxCreateRadius * 2 - 1);
 	// 实例缓冲所能容纳的最大已加载区块数量 (11x11=121，最大保持范围)
@@ -930,7 +930,7 @@ private:
 	};
 
 
-	// 16x16x24 的区块信息结构体，存储区块 实例偏移、实例量、AABB 包围盒、区块状态 这些元信息
+	// 16x16x24 的区块元信息结构体，存储区块 实例偏移、实例量、区块状态 这些元信息
 	struct CHUNK
 	{
 		XMINT2 ChunkXZ = {};		// 整个区块左上角的 xz 轴坐标
