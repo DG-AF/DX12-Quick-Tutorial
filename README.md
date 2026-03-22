@@ -28,6 +28,7 @@
   - [(19) PerlinNoise](#19-PerlinNoise)
   - [(20) InfiniteWorld](#20-InfiniteWorld)
   - [(21) GPUFrustumCulling](#21-GPUFrustumCulling)
+  - [(22) ParticleSystem](#22-ParticleSystem)
 
 ## 读者应该 clone 哪一个分支
 
@@ -39,9 +40,9 @@
 (备用 QQ：1281866925，备用邮箱：3976357120@qq.com)
 
 
-## 2026.3.22 更新
+## 2026.3.28 第二次 Merge 更新
 
-1. 更新第 20 与 21 章代码：**020-InfiniteWorld**、**021-GPUFrustumCulling**<br/>
+1. 更新第 22 章代码：**022-ParticleSystem**<br/>
 2. 修正部分 bug 与文字描述
 
 ## 前言
@@ -259,6 +260,15 @@ DirectX 12 API 全面变革的静态 PSO，资源绑定，异步渲染架构，�
 认识视锥剔除，认识命令签名，UAV 原始缓冲区，ExecuteIndirect，学会 GPU 视锥剔除，熟练计算着色器的基本使用方法，进一步理解 Transition 转换屏障的使用，从上一章的 4x4 的区块可见范围，扩大到更大的 8x8 范围，并进一步减少渲染开销
 
 [教程地址：DX12 快速教程(21) —— GPU 视锥剔除](https://blog.csdn.net/DGAF2198588973/article/details/159354380)
+
+
+### (22) ParticleSystem
+
+![22.gif](https://a2.boltp.com/2026/03/28/69c7d99160d9e.gif)
+
+进一步学习计算着色器，学习粒子的简单动态生成与销毁，模拟 Minecraft 的粒子破坏飞溅效果，在计算着色器上实现并管理 HiveBuffer、数组空闲栈、栈顶指针、待生成列表 这些数据结构，初步认识半隐式欧拉积分，进一步掌握根签名，学习根描述表连续绑定多个描述符的特性，初步学习不同类型描述符对同一资源的创建绑定与状态转换
+
+[教程地址：DX12 快速教程(22) —— 简单粒子系统](https://blog.csdn.net/DGAF2198588973/article/details/159586530)
 
 
 

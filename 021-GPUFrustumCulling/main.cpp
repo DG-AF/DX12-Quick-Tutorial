@@ -637,7 +637,7 @@ private:
 	UINT RTVDescriptorSize = 0;								// RTV 描述符的大小
 	UINT FrameIndex = 0;									// 帧索引，表示当前渲染的第 i 帧 (第 i 个渲染目标)
 
-	ComPtr<ID3D12Fence> m_RenderFence;						// 专门用于 渲染 + 短期复制资源 的围栏
+	ComPtr<ID3D12Fence> m_RenderFence;						// 专门用于 渲染 + 复制资源 的围栏
 	UINT64 FenceValue = 0;									// 用于围栏等待的围栏值
 	HANDLE RenderEvent = NULL;								// GPU 渲染事件
 	D3D12_RESOURCE_BARRIER beg_barrier = {};				// 渲染开始的资源屏障，呈现 -> 渲染目标
@@ -2722,7 +2722,7 @@ public:
 
 
 				// 如果某个区块在保持范围之外，暂时不需要加载它了，给这个区块加入卸载列表
-				// 注意！最大保持半径 (5) 要乘以区块边长！因为上面相减得到的距离是以方块边长为粒度的！
+				// 注意！最大保持半径 (9) 要乘以区块边长！因为上面相减得到的距离是以方块边长为粒度的！
 				if (distance > (MaxUnloadRadius - 1) * ChunkSideLength)
 				{
 					// 加入卸载标志
@@ -3533,7 +3533,3 @@ int WINAPI WinMain(HINSTANCE hins, HINSTANCE hPrev, LPSTR cmdLine, int cmdShow)
 {
 	DX12Engine::Run(hins);
 }
-
-
-
-

@@ -45,6 +45,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "020-InfiniteWorld", "020-In
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "021-GPUFrustumCulling", "021-GPUFrustumCulling\021-GPUFrustumCulling.vcxproj", "{C3BCDD36-3191-44A6-B7E2-D5DD909F053E}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "022-ParticleSystem", "022-ParticleSystem\022-ParticleSystem.vcxproj", "{A06C1E26-45DA-46A8-8E0A-75AB47A89938}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -221,6 +223,14 @@ Global
 		{C3BCDD36-3191-44A6-B7E2-D5DD909F053E}.Release|x64.Build.0 = Release|x64
 		{C3BCDD36-3191-44A6-B7E2-D5DD909F053E}.Release|x86.ActiveCfg = Release|Win32
 		{C3BCDD36-3191-44A6-B7E2-D5DD909F053E}.Release|x86.Build.0 = Release|Win32
+		{A06C1E26-45DA-46A8-8E0A-75AB47A89938}.Debug|x64.ActiveCfg = Debug|x64
+		{A06C1E26-45DA-46A8-8E0A-75AB47A89938}.Debug|x64.Build.0 = Debug|x64
+		{A06C1E26-45DA-46A8-8E0A-75AB47A89938}.Debug|x86.ActiveCfg = Debug|Win32
+		{A06C1E26-45DA-46A8-8E0A-75AB47A89938}.Debug|x86.Build.0 = Debug|Win32
+		{A06C1E26-45DA-46A8-8E0A-75AB47A89938}.Release|x64.ActiveCfg = Release|x64
+		{A06C1E26-45DA-46A8-8E0A-75AB47A89938}.Release|x64.Build.0 = Release|x64
+		{A06C1E26-45DA-46A8-8E0A-75AB47A89938}.Release|x86.ActiveCfg = Release|Win32
+		{A06C1E26-45DA-46A8-8E0A-75AB47A89938}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

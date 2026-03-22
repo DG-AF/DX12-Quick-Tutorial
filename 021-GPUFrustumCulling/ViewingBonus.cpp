@@ -2759,7 +2759,7 @@ public:
 
 
 				// 如果某个区块在保持范围之外，暂时不需要加载它了，给这个区块加入卸载列表
-				// 注意！最大保持半径 (5) 要乘以区块边长！因为上面相减得到的距离是以方块边长为粒度的！
+				// 注意！最大保持半径 (9) 要乘以区块边长！因为上面相减得到的距离是以方块边长为粒度的！
 				if (distance > (MaxUnloadRadius - 1) * ChunkSideLength)
 				{
 					// 加入卸载标志
@@ -3159,7 +3159,7 @@ public:
 				barrier.Transition.Subresource = 0;
 				m_CommandList->ResourceBarrier(1, &barrier);
 
-				// 复制计数器（4字节）到回读堆
+				// 复制计数器 (4 字节) 到回读堆
 				m_CommandList->CopyBufferRegion(m_CounterReadbackResource.Get(), 0,
 					m_UAVIndirectCommandCounter_DefaultResource.Get(), 0, 4);
 
