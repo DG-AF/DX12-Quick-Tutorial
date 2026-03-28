@@ -50,7 +50,7 @@ struct IA_To_VS
 	uint FaceIndex : FACEINDEX;		// 顶点所属的立方体面索引
 	
 	// 粒子实例在 m_ParticlesBuffer 的索引，我们靠它获取每个粒子实例的数据
-	// SV_InstanceID 是一个系统值，指定每个粒子实例索引 (从 0 开始) 由 GPU 自动生成
+	// SV_InstanceID 是一个系统语义，指定每个粒子实例索引 (从 0 开始) 由 GPU 自动生成
 	// 这个值不是从顶点缓冲区或实例缓冲区读取的，因此不需要在 PSO 输入布局中描述
 	uint ParticleInstanceIndex_InBuffer : SV_InstanceID;
 };
@@ -88,7 +88,7 @@ VS_To_PS VSMain(IA_To_VS VSInput)
 		VSOutput.NDCPosition = mul(VSInput.Position, MVPMatrix);
 		
 		// 粒子的 UV 坐标只采样纹理左下角一部分区域
-		// clamp: 将输入的 UV 值，TexcoordU 截断到 [0.0, 0.875]，TexcoordV 截断到 [0.125, 1.0]
+		// clamp: 将输入的 UV 值，TexcoordU 截断到 [0.0, 0.125]，TexcoordV 截断到 [0.875, 1.0]
 		VSOutput.TexcoordUV = clamp(VSInput.TexcoordUV, float2(0.0, 0.875), float2(0.125, 1.0));
 		
 		// 得到该顶点最终用于采样的纹理索引

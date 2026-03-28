@@ -633,6 +633,11 @@ public:
 		m_D2DDeviceContext->EndDraw();
 
 
+		// 结束绘制后，D2D 设备上下文还需要设置渲染目标为 nullptr，解除 D2D 对渲染目标的引用
+		// 否则，D2D 会继续引用 RenderTarget，下一帧绘制前驱动帮我们做隐式解引用与转换，产生开销而降帧
+		m_D2DDeviceContext->SetTarget(nullptr);
+
+
 		// D3D11On12 设备告诉包装资源 (D3D11RenderTarget) 进入 OutState (D3D12_RESOURCE_STATE_PRESENT) 呈现状态
 		// 说明 D2D 已经渲染完成了，接下来释放包装资源的"内部所有权"和"状态转换独占权"，将这些交还给 D3D12 层设备
 		// 另外这个操作还会自动插入一个 RenderTarget -> Present 的资源屏障，所以 end_barrier 我们注释掉不用了，防止状态重复转换

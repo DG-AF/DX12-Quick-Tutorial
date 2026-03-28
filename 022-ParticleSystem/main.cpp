@@ -268,7 +268,7 @@ private:
 	std::wstring HUDBitmapFileName = L"UIresource/icons.png";
 
 
-	// 物品栏使用的纹理
+	// 物品栏立体图标使用的图片文件名
 	std::vector<std::wstring> InventoryBlockNames =
 	{
 		// 0.熔炉
@@ -1146,6 +1146,11 @@ public:
 
 		// D2D 设备上下文结束 2D 渲染！D2DDeviceContext 结束对渲染命令的记录，准备提交给 GPU
 		m_D2DDeviceContext->EndDraw();
+
+
+		// 结束绘制后，D2D 设备上下文还需要设置渲染目标为 nullptr，解除 D2D 对渲染目标的引用
+		// 否则，D2D 会继续引用 RenderTarget，下一帧绘制前驱动帮我们做隐式解引用与转换，产生开销而降帧
+		m_D2DDeviceContext->SetTarget(nullptr);
 
 
 		// D3D11On12 设备告诉包装资源 (D3D11RenderTarget) 进入 OutState (D3D12_RESOURCE_STATE_PRESENT) 呈现状态
@@ -2794,11 +2799,11 @@ public:
 			UAVDescriptorDesc.Buffer.NumElements = MaxAllocParticlesNums;
 
 
-// 获取 m_ParticleUAVSRVHeap 第二个 CPU 描述符
-ParticleUAVSRVHeap_CPUBaseHandle.ptr += CBVSRVUAVDescriptorSize;
-// 创建并绑定 m_ParticlesFreeStack UAV 描述符
-m_D3D12Device->CreateUnorderedAccessView(m_UAVParticlesFreeStack_DefaultResource.Get(),
-	nullptr, &UAVDescriptorDesc, ParticleUAVSRVHeap_CPUBaseHandle);
+			// 获取 m_ParticleUAVSRVHeap 第二个 CPU 描述符
+			ParticleUAVSRVHeap_CPUBaseHandle.ptr += CBVSRVUAVDescriptorSize;
+			// 创建并绑定 m_ParticlesFreeStack UAV 描述符
+			m_D3D12Device->CreateUnorderedAccessView(m_UAVParticlesFreeStack_DefaultResource.Get(),
+				nullptr, &UAVDescriptorDesc, ParticleUAVSRVHeap_CPUBaseHandle);
 		}
 
 
@@ -4577,7 +4582,7 @@ m_D3D12Device->CreateUnorderedAccessView(m_UAVParticlesFreeStack_DefaultResource
 						break;
 
 
-						// 数字键，就设置 Selected_Slot_Index
+					// 数字键，就设置 Selected_Slot_Index
 					case '1':
 					case '2':
 					case '3':
